@@ -72,16 +72,24 @@ func (r *Request) do(ctx context.Context, conn io.Writer) (err error) {
 		switch err := err.(type) {
 		case syscall.Errno:
 			switch err {
+			case syscall.ETIMEDOUT:
+				status = StatusTTLExpired
+			case syscall.EPROTOTYPE,
+				syscall.EPROTONOSUPPORT,
+				syscall.EAFNOSUPPORT:
+				status = StatusAddrTypeNotSupported
 			case syscall.ECONNREFUSED:
 				status = StatusConnectionRefused
-			case syscall.ENETUNREACH:
+			case syscall.ENETDOWN, syscall.ENETUNREACH:
 				status = StatusNetworkUnreachable
+			case syscall.EHOSTUNREACH:
+				status = StatusHostUnreachable
 			}
 		default:
 			if err == ErrCommandNotSupported {
 				status = StatusCommandNotSupported
 			} else {
-				status = StatusHostUnreachable
+				status = StatusGeneralServerFailure
 			}
 		}
 		if err := r.reply(conn, status, nil); err != nil {

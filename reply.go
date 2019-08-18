@@ -9,8 +9,8 @@ type Reply int
 const (
 	// StatusSucceeded repserents successed to reply.
 	StatusSucceeded Reply = iota
-	// StatusServerFailure :
-	StatusServerFailure
+	// StatusGeneralServerFailure :
+	StatusGeneralServerFailure
 	// StatusNotAllowedByRuleSet :
 	StatusNotAllowedByRuleSet
 	// StatusNetworkUnreachable :
@@ -31,7 +31,7 @@ func (code Reply) String() string {
 	switch code {
 	case StatusSucceeded:
 		return "succeeded"
-	case StatusServerFailure:
+	case StatusGeneralServerFailure:
 		return "general SOCKS server failure"
 	case StatusNotAllowedByRuleSet:
 		return "connection not allowed by ruleset"
