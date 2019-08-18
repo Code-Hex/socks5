@@ -25,7 +25,8 @@ func New(c *Config) *Server {
 	}
 	if c.DialContext == nil {
 		c.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.Dial(network, addr)
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
 		}
 	}
 	return &Server{
