@@ -1,6 +1,6 @@
 package auth
 
-import "io"
+import "net"
 
 const socks5Version = 5
 
@@ -24,5 +24,5 @@ const (
 )
 
 type Authenticator interface {
-	Authenticate(w io.Writer, r io.Reader) error
+	Authenticate(conn net.Conn) error
 }

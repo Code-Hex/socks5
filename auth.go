@@ -4,16 +4,17 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 
 	"github.com/Code-Hex/socks5/auth"
 )
 
 var ErrUnSupportedMethod = fmt.Errorf("unsupported authentication method")
 
-func (s *Server) authenticate(w io.Writer, r io.Reader) error {
+func (s *Server) authenticate(conn net.Conn) error {
 	// Read the version byte
 	header := make([]byte, 2)
-	if _, err := r.Read(header); err != nil {
+	if _, err := conn.Read(header); err != nil {
 		return fmt.Errorf("failed to get authenticate information: %v", err)
 	}
 
@@ -24,20 +25,20 @@ func (s *Server) authenticate(w io.Writer, r io.Reader) error {
 
 	numMethods := int(header[1])
 	methods := make([]byte, numMethods)
-	if _, err := io.ReadAtLeast(r, methods, numMethods); err != nil {
+	if _, err := io.ReadAtLeast(conn, methods, numMethods); err != nil {
 		return err
 	}
 
 	authenticator, err := s.methodAssign(methods)
 	if err != nil {
-		_, e := w.Write([]byte{
+		_, e := conn.Write([]byte{
 			socks5Version,
 			byte(auth.MethodNoAcceptableMethods),
 		})
 		log.Println(e)
 		return err
 	}
-	return authenticator.Authenticate(w, r)
+	return authenticator.Authenticate(conn)
 }
 
 func (s *Server) methodAssign(methods []byte) (auth.Authenticator, error) {

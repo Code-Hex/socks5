@@ -76,7 +76,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) error {
 		conn.Close()
 	}()
 
-	if err := s.authenticate(conn, conn); err != nil {
+	if err := s.authenticate(conn); err != nil {
 		return err
 	}
 
