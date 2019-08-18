@@ -19,7 +19,6 @@ type Request struct {
 	Version  int
 	Command  Command
 	DestAddr *Addr
-	BufConn  io.Reader
 
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
@@ -51,13 +50,12 @@ func (s *Server) newRequest(conn io.Reader) (*Request, error) {
 		Version:  socks5Version,
 		Command:  Command(header[1]),
 		DestAddr: addr,
-		BufConn:  conn,
 
 		DialContext: s.config.DialContext,
 	}, nil
 }
 
-func (r *Request) do(ctx context.Context, conn io.Writer) (err error) {
+func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
 	switch r.Command {
 	case CmdConnect:
 		err = r.connect(ctx, conn)
@@ -149,7 +147,7 @@ func (r *Request) reply(conn io.Writer, reply Reply, addr *Addr) error {
 	return err
 }
 
-func (r *Request) connect(ctx context.Context, conn io.Writer) error {
+func (r *Request) connect(ctx context.Context, conn net.Conn) error {
 	address := r.DestAddr.String()
 	target, err := r.DialContext(ctx, "tcp", address)
 	if err != nil {
@@ -164,7 +162,7 @@ func (r *Request) connect(ctx context.Context, conn io.Writer) error {
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		_, err := io.Copy(target, r.BufConn)
+		_, err := io.Copy(target, conn)
 		return err
 	})
 	eg.Go(func() error {
