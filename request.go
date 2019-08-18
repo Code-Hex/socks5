@@ -67,36 +67,38 @@ func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
 	}
 
 	if err != nil {
-		var status Reply
-		switch err := err.(type) {
-		case syscall.Errno:
-			switch err {
-			case syscall.ETIMEDOUT:
-				status = StatusTTLExpired
-			case syscall.EPROTOTYPE,
-				syscall.EPROTONOSUPPORT,
-				syscall.EAFNOSUPPORT:
-				status = StatusAddrTypeNotSupported
-			case syscall.ECONNREFUSED:
-				status = StatusConnectionRefused
-			case syscall.ENETDOWN, syscall.ENETUNREACH:
-				status = StatusNetworkUnreachable
-			case syscall.EHOSTUNREACH:
-				status = StatusHostUnreachable
-			}
-		default:
-			if err == ErrCommandNotSupported {
-				status = StatusCommandNotSupported
-			} else {
-				status = StatusGeneralServerFailure
-			}
-		}
+		status := replyStatusByErr(err)
 		if err := r.reply(conn, status, nil); err != nil {
 			return fmt.Errorf("failed to reply: %v", err)
 		}
 		return err
 	}
 	return nil
+}
+
+func replyStatusByErr(err error) Reply {
+	switch err := err.(type) {
+	case syscall.Errno:
+		switch err {
+		case syscall.ETIMEDOUT:
+			return StatusTTLExpired
+		case syscall.EPROTOTYPE,
+			syscall.EPROTONOSUPPORT,
+			syscall.EAFNOSUPPORT:
+			return StatusAddrTypeNotSupported
+		case syscall.ECONNREFUSED:
+			return StatusConnectionRefused
+		case syscall.ENETDOWN, syscall.ENETUNREACH:
+			return StatusNetworkUnreachable
+		case syscall.EHOSTUNREACH:
+			return StatusHostUnreachable
+		}
+	default:
+		if err == ErrCommandNotSupported {
+			return StatusCommandNotSupported
+		}
+	}
+	return StatusGeneralServerFailure
 }
 
 func (r *Request) reply(conn io.Writer, reply Reply, addr net.Addr) error {
