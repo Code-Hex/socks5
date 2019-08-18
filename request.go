@@ -160,13 +160,17 @@ func (r *Request) connect(ctx context.Context, conn net.Conn) error {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
+	return transport(conn, target)
+}
+
+func transport(conn1, conn2 io.ReadWriter) error {
 	var eg errgroup.Group
 	eg.Go(func() error {
-		_, err := io.Copy(target, conn)
+		_, err := io.Copy(conn1, conn2)
 		return err
 	})
 	eg.Go(func() error {
-		_, err := io.Copy(conn, target)
+		_, err := io.Copy(conn2, conn1)
 		return err
 	})
 	return eg.Wait()
