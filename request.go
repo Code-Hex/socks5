@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"syscall"
 
 	"golang.org/x/sync/errgroup"
@@ -98,7 +99,7 @@ func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
 	return nil
 }
 
-func (r *Request) reply(conn io.Writer, reply Reply, addr *Addr) error {
+func (r *Request) reply(conn io.Writer, reply Reply, addr net.Addr) error {
 	var (
 		addrType, addrPort int
 		addrBody           []byte
@@ -110,17 +111,37 @@ func (r *Request) reply(conn io.Writer, reply Reply, addr *Addr) error {
 		addrPort = 0
 		addrBody = make([]byte, 4)
 	default:
-		addrType = addr.Type
-		addrPort = addr.Port
-		if addrType == AddrTypeFQDN {
+		host, p, err := net.SplitHostPort(addr.String())
+		if err != nil {
+			return err
+		}
+		port, err := strconv.Atoi(p)
+		if err != nil {
+			return err
+		}
+		addrPort = port
+
+		if ip := net.ParseIP(host); ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				addrType = AddrTypeIPv4
+				addrBody = ip4
+			} else if ip6 := ip.To16(); ip6 != nil {
+				addrType = AddrTypeIPv6
+				addrBody = ip6
+			} else {
+				return errors.New("unknown address type")
+			}
+		} else {
+			if len(host) > 255 {
+				return errors.New("FQDN too long")
+			}
+			addrType = AddrTypeFQDN
 			addrBody = append(
 				[]byte{
-					byte(len(addr.Host)),
+					byte(len(host)),
 				},
-				[]byte(addr.Host)...,
+				[]byte(host)...,
 			)
-		} else {
-			addrBody = []byte(addr.Host)
 		}
 	}
 
@@ -163,14 +184,50 @@ func (r *Request) connect(ctx context.Context, conn net.Conn) error {
 	return transport(conn, target)
 }
 
-func transport(conn1, conn2 io.ReadWriter) error {
+func (r *Request) bind(ctx context.Context, conn net.Conn) error {
+	address := r.DestAddr.String()
+	addr, err := net.ResolveIPAddr("tcp", address)
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", addr.String())
+	if err != nil {
+		return err
+	}
+
+	host, p, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(p)
+	bind := &Addr{
+		Host: host,
+		Port: port,
+	}
+
+	// TODO(codehex): it should pass the local address information?
+	if err := r.reply(conn, StatusSucceeded, bind); err != nil {
+		return fmt.Errorf("failed to send reply: %v", err)
+	}
+
+	c, err := ln.Accept()
+	if err != nil {
+		return err
+	}
+
+	rConn, wConn := net.Pipe()
+
+	transport(rConn, c)
+	transport(wConn, conn)
+
+	return nil
+}
+
+func transport(dst, src io.ReadWriter) error {
 	var eg errgroup.Group
 	eg.Go(func() error {
-		_, err := io.Copy(conn1, conn2)
+		_, err := io.Copy(dst, src)
 		return err
 	})
 	eg.Go(func() error {
-		_, err := io.Copy(conn2, conn1)
+		_, err := io.Copy(src, dst)
 		return err
 	})
 	return eg.Wait()

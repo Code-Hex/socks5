@@ -16,10 +16,11 @@ func (u UnrecognizedAddress) Error() string {
 }
 
 type Addr struct {
-	Type int
 	Host string
 	Port int
 }
+
+func (a *Addr) Network() string { return "tcp" }
 
 func (a *Addr) String() string {
 	return net.JoinHostPort(a.Host, strconv.Itoa(a.Port))
@@ -45,7 +46,6 @@ func readAddress(conn io.Reader) (*Addr, error) {
 		return nil, err
 	}
 	return &Addr{
-		Type: int(addrType[0]),
 		Host: host,
 		Port: port,
 	}, nil
