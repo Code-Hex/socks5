@@ -14,41 +14,10 @@ import (
 	"github.com/Code-Hex/socks5/internal/address"
 )
 
-type Addr struct {
-	Host string
-	Port string
-	Net  string
-}
-
-func newAddr(address, network string) net.Addr {
-	host, port, _ := net.SplitHostPort(address)
-	return &Addr{
-		Host: host,
-		Port: port,
-		Net:  network,
-	}
-}
-
-func (a *Addr) String() string {
-	if a == nil {
-		return "<nil>"
-	}
-	return net.JoinHostPort(a.Host, a.Port)
-}
-
-// Network returns string such as "tcp", "udp"
-func (a *Addr) Network() string {
-	if a == nil {
-		return "<nil>"
-	}
-	return a.Net
-}
-
 // A Dialer holds SOCKS-specific options.
 type Dialer struct {
-	cmd socks5.Command // either CmdConnect or cmdBind
-
-	network, address string // these fields for socks5
+	cmd              socks5.Command // either CmdConnect or cmdBind
+	network, address string         // these fields for socks5
 
 	AuthMethods map[auth.Method]auth.Authenticator
 }
@@ -184,6 +153,8 @@ func (d *Dialer) readReply(c io.ReadWriter, b []byte) error {
 		l += net.IPv6len
 		ip = make(net.IP, net.IPv6len)
 	case address.TypeFQDN:
+		// Read 2 bytes
+		// First off, read length of the fqdn, then read fqdn string
 		if _, err := io.ReadFull(c, b[:1]); err != nil {
 			return err
 		}

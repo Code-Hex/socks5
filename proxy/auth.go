@@ -11,5 +11,6 @@ var _ auth.Authenticator = (*NotRequired)(nil)
 type NotRequired struct{}
 
 func (n *NotRequired) Authenticate(conn io.ReadWriter) error {
+	// nothing to do
 	return nil
 }
