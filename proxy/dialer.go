@@ -277,7 +277,7 @@ func splitHostPort(address string) (string, int, error) {
 		return "", 0, err
 	}
 	if 1 > portnum || portnum > 0xffff {
-		return "", 0, fmt.Errorf("port number out of range: %d", port)
+		return "", 0, fmt.Errorf("port number out of range: %d", portnum)
 	}
 	return host, portnum, nil
 }
