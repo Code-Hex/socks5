@@ -10,7 +10,17 @@ import (
 	"github.com/Code-Hex/socks5/auth"
 )
 
-var ErrUnSupportedMethod = fmt.Errorf("unsupported authentication method")
+var _ auth.Authenticator = (*NotRequired)(nil)
+
+type NotRequired struct{}
+
+func (n *NotRequired) Authenticate(conn io.ReadWriter) error {
+	_, err := conn.Write([]byte{
+		socks5.Version,
+		byte(auth.MethodNotRequired),
+	})
+	return err
+}
 
 func (s *Socks5) authenticate(conn net.Conn) error {
 	// Read the version byte
@@ -43,10 +53,11 @@ func (s *Socks5) authenticate(conn net.Conn) error {
 }
 
 func (s *Socks5) methodAssign(methods []byte) (auth.Authenticator, error) {
-	for _, method := range methods {
+	for _, b := range methods {
+		method := auth.Method(b) // type cast
 		if authenticator, ok := s.config.AuthMethods[method]; ok {
 			return authenticator, nil
 		}
 	}
-	return nil, ErrUnSupportedMethod
+	return nil, auth.ErrUnSupportedMethod
 }

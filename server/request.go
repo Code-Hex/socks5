@@ -61,7 +61,9 @@ func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
 	case socks5.CmdConnect:
 		err = r.connect(ctx, conn)
 	case socks5.CmdBind:
+		fallthrough
 	case socks5.CmdUDPAssociate:
+		fallthrough
 	default:
 		err = ErrCommandNotSupported
 	}

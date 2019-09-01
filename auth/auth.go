@@ -1,12 +1,19 @@
 package auth
 
-import "net"
+import (
+	"errors"
+	"io"
+)
 
-const socks5Version = 5
+// ErrUnSupportedMethod returns when method has not been supported.
+var ErrUnSupportedMethod = errors.New("unsupported authentication method")
+
+// Method represents auth method.
+type Method byte
 
 const (
 	// MethodNotRequired represents no authentication required.
-	MethodNotRequired byte = iota // 0x00
+	MethodNotRequired Method = iota // 0x00
 
 	// MethodGSSAPI represents use GSSAPI.
 	// This implements based on https://tools.ietf.org/html/rfc1961
@@ -20,9 +27,9 @@ const (
 	// X'80' to X'FE' RESERVED FOR PRIVATE METHODS
 
 	// MethodNoAcceptableMethods represents no acceptable authentication methods.
-	MethodNoAcceptableMethods byte = 0xff
+	MethodNoAcceptableMethods Method = 0xff
 )
 
 type Authenticator interface {
-	Authenticate(conn net.Conn) error
+	Authenticate(conn io.ReadWriter) error
 }

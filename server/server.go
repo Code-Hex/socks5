@@ -14,7 +14,7 @@ import (
 var ErrServerClosed = errors.New("socks5: Server closed")
 
 type Config struct {
-	AuthMethods map[byte]auth.Authenticator
+	AuthMethods map[auth.Method]auth.Authenticator
 
 	// Optional.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -25,8 +25,8 @@ func New(c *Config) *Socks5 {
 		c = &Config{}
 	}
 	if len(c.AuthMethods) == 0 {
-		c.AuthMethods = map[byte]auth.Authenticator{
-			auth.MethodNotRequired: &auth.NotRequired{},
+		c.AuthMethods = map[auth.Method]auth.Authenticator{
+			auth.MethodNotRequired: &NotRequired{},
 		}
 	}
 	if c.DialContext == nil {
