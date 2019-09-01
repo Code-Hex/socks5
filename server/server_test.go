@@ -1,4 +1,4 @@
-package socks5
+package server
 
 import (
 	"bytes"
@@ -70,25 +70,25 @@ func TestSocks5_Connect(t *testing.T) {
 }
 
 func TestSocks5_Bind(t *testing.T) {
-	// ln, err := net.Listen("tcp", "127.0.0.1:0")
-	// if err != nil {
-	// 	t.Fatalf("err: %v", err)
-	// }
-	// go func() {
-	// 	if err := New(nil).Serve(ln); err != nil {
-	// 		panic(err)
-	// 	}
-	// }()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	go func() {
+		if err := New(nil).Serve(ln); err != nil {
+			panic(err)
+		}
+	}()
 
-	// lAddr := ln.Addr()
-	// log.Println("socks", lAddr.String())
-	// p, err := proxy.SOCKS5(lAddr.Network(), lAddr.String(), nil, proxy.Direct)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
+	lAddr := ln.Addr()
+	log.Println("socks", lAddr.String())
+	p, err := proxy.SOCKS5(lAddr.Network(), "127.0.0.1:9150", nil, proxy.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	addr := echoServerOnce(t)
-	conn, err := net.Dial("tcp", addr.String())
+	conn, err := p.Dial("tcp", addr.String())
 	if err != nil {
 		t.Fatal(err)
 	}

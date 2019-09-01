@@ -1,4 +1,4 @@
-package socks5
+package server
 
 import (
 	"fmt"
@@ -6,12 +6,13 @@ import (
 	"log"
 	"net"
 
+	"github.com/Code-Hex/socks5"
 	"github.com/Code-Hex/socks5/auth"
 )
 
 var ErrUnSupportedMethod = fmt.Errorf("unsupported authentication method")
 
-func (s *Server) authenticate(conn net.Conn) error {
+func (s *Socks5) authenticate(conn net.Conn) error {
 	// Read the version byte
 	header := make([]byte, 2)
 	if _, err := conn.Read(header); err != nil {
@@ -19,7 +20,7 @@ func (s *Server) authenticate(conn net.Conn) error {
 	}
 
 	// Ensure we are compatible
-	if header[0] != socks5Version {
+	if header[0] != socks5.Version {
 		return fmt.Errorf("unsupported version: %d", header[0])
 	}
 
@@ -32,7 +33,7 @@ func (s *Server) authenticate(conn net.Conn) error {
 	authenticator, err := s.methodAssign(methods)
 	if err != nil {
 		_, e := conn.Write([]byte{
-			socks5Version,
+			socks5.Version,
 			byte(auth.MethodNoAcceptableMethods),
 		})
 		log.Println(e)
@@ -41,7 +42,7 @@ func (s *Server) authenticate(conn net.Conn) error {
 	return authenticator.Authenticate(conn)
 }
 
-func (s *Server) methodAssign(methods []byte) (auth.Authenticator, error) {
+func (s *Socks5) methodAssign(methods []byte) (auth.Authenticator, error) {
 	for _, method := range methods {
 		if authenticator, ok := s.config.AuthMethods[method]; ok {
 			return authenticator, nil

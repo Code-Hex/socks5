@@ -1,4 +1,4 @@
-package socks5
+package server
 
 import (
 	"context"
@@ -7,11 +7,42 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/Code-Hex/socks5/auth"
 )
 
 var ErrServerClosed = errors.New("socks5: Server closed")
 
-type Server struct {
+type Config struct {
+	AuthMethods map[byte]auth.Authenticator
+
+	// Optional.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+func New(c *Config) *Socks5 {
+	if c == nil {
+		c = &Config{}
+	}
+	if len(c.AuthMethods) == 0 {
+		c.AuthMethods = map[byte]auth.Authenticator{
+			auth.MethodNotRequired: &auth.NotRequired{},
+		}
+	}
+	if c.DialContext == nil {
+		c.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		}
+	}
+	return &Socks5{
+		config:      c,
+		shutdown:    make(chan struct{}),
+		waitingDone: make(chan struct{}),
+	}
+}
+
+type Socks5 struct {
 	config *Config
 
 	onceShutdown sync.Once
@@ -22,7 +53,7 @@ type Server struct {
 }
 
 // ListenAndServe is used to create a listener and serve on it
-func (s *Server) ListenAndServe(network, addr string) error {
+func (s *Socks5) ListenAndServe(network, addr string) error {
 	l, err := net.Listen(network, addr)
 	if err != nil {
 		return err
@@ -31,7 +62,7 @@ func (s *Server) ListenAndServe(network, addr string) error {
 }
 
 // Serve is used to serve connections from a listener
-func (s *Server) Serve(l net.Listener) error {
+func (s *Socks5) Serve(l net.Listener) error {
 	ctx := context.Background()
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
@@ -69,7 +100,7 @@ func (s *Server) Serve(l net.Listener) error {
 	}
 }
 
-func (s *Server) serveConn(ctx context.Context, conn net.Conn) error {
+func (s *Socks5) serveConn(ctx context.Context, conn net.Conn) error {
 	s.wg.Add(1)
 	defer func() {
 		s.wg.Done()
@@ -88,7 +119,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) error {
 	return req.do(ctx, conn)
 }
 
-func (s *Server) Shutdown(ctx context.Context) error {
+func (s *Socks5) Shutdown(ctx context.Context) error {
 	s.onceShutdown.Do(func() {
 		close(s.shutdown)
 		go func() {

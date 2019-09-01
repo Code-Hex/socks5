@@ -1,4 +1,4 @@
-package socks5
+package address
 
 import (
 	"fmt"
@@ -7,13 +7,15 @@ import (
 	"strconv"
 )
 
-type UnrecognizedAddress struct {
+type Unrecognized struct {
 	Type int
 }
 
-func (u UnrecognizedAddress) Error() string {
+func (u Unrecognized) Error() string {
 	return fmt.Sprintf("unrecognized address type: %d", u.Type)
 }
+
+var _ (net.Addr) = (*Addr)(nil)
 
 type Addr struct {
 	Host string
@@ -27,12 +29,12 @@ func (a *Addr) String() string {
 }
 
 const (
-	AddrTypeIPv4 = 0x01
-	AddrTypeFQDN = 0x03
-	AddrTypeIPv6 = 0x04
+	TypeIPv4 = 0x01
+	TypeFQDN = 0x03
+	TypeIPv6 = 0x04
 )
 
-func readAddress(conn io.Reader) (*Addr, error) {
+func Read(conn io.Reader) (*Addr, error) {
 	addrType := make([]byte, 1)
 	if _, err := conn.Read(addrType); err != nil {
 		return nil, err
@@ -53,14 +55,14 @@ func readAddress(conn io.Reader) (*Addr, error) {
 
 func readHost(conn io.Reader, typ byte) (string, error) {
 	switch typ {
-	case AddrTypeIPv4:
+	case TypeIPv4:
 		addr := make([]byte, 4)
 		if _, err := io.ReadAtLeast(conn, addr, 4); err != nil {
 			return "", err
 		}
 		ipv4 := net.IPv4(addr[0], addr[1], addr[2], addr[3])
 		return ipv4.String(), nil
-	case AddrTypeFQDN:
+	case TypeFQDN:
 		fqdnLen := make([]byte, 1)
 		if _, err := conn.Read(fqdnLen); err != nil {
 			return "", err
@@ -71,14 +73,14 @@ func readHost(conn io.Reader, typ byte) (string, error) {
 			return "", err
 		}
 		return string(fqdn), nil
-	case AddrTypeIPv6:
+	case TypeIPv6:
 		addr := make([]byte, 16)
 		if _, err := io.ReadAtLeast(conn, addr, 16); err != nil {
 			return "", err
 		}
 		return net.IP(addr).String(), nil
 	}
-	return "", &UnrecognizedAddress{
+	return "", &Unrecognized{
 		Type: int(typ),
 	}
 }
