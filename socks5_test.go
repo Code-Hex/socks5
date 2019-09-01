@@ -1,4 +1,4 @@
-package server
+package socks5_test
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/Code-Hex/socks5"
 	"github.com/Code-Hex/socks5/proxy"
+	"github.com/Code-Hex/socks5/server"
 )
 
 func TestSocks5_Connect(t *testing.T) {
@@ -22,7 +23,7 @@ func TestSocks5_Connect(t *testing.T) {
 	}
 
 	go func() {
-		if err := New(nil).Serve(ln); err != nil {
+		if err := server.New(nil).Serve(ln); err != nil {
 			panic(err)
 		}
 	}()
