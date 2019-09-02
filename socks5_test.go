@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,76 @@ func TestSocks5_Connect(t *testing.T) {
 	}
 	if buf.String() != "OK" {
 		t.Fatalf(`got %s, but want "OK"`, buf.String())
+	}
+}
+
+func TestA(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			panic(err)
+		}
+
+		ln2, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			panic(err)
+		}
+		addr := ln2.Addr()
+		b := []byte(
+			addr.Network() + "," + addr.String(),
+		)
+		if _, err := conn.Write(b); err != nil {
+			panic(err)
+		}
+
+		conn2, err := ln2.Accept()
+		if err != nil {
+			panic(err)
+		}
+		if _, err := io.Copy(conn2, conn2); err != nil {
+			panic(err)
+		}
+
+		conn.Close()
+		conn2.Close()
+	}()
+
+	addr := ln.Addr()
+	conn, err := net.Dial(addr.Network(), addr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b := make([]byte, 100)
+	n, err := conn.Read(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrSlice := strings.Split(string(b[:n]), ",")
+	network, address := addrSlice[0], addrSlice[1]
+
+	conn2, err := net.Dial(network, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := conn2.Write([]byte("OK")); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := make([]byte, 2)
+	n2, err := conn2.Read(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(resp[:n2]); got != "OK" {
+		t.Fatalf("got %s, but want `OK`", got)
 	}
 }
 
