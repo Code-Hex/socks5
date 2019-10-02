@@ -15,7 +15,9 @@ func (l *Listner) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	if err := conn.Close(); err != nil {
+		return nil, err
+	}
 	return l.Listener.Accept()
 }
 
