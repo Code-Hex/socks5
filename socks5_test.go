@@ -1,6 +1,7 @@
 package socks5_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +51,7 @@ func TestSocks5_Connect(t *testing.T) {
 	lAddr := ln.Addr()
 	log.Println("socks", lAddr.String())
 	ctx := context.Background()
-	p, err := proxy.Socks5(ctx, socks5.CmdConnect, lAddr.Network(), lAddr.String())
+	p, err := proxy.Socks5(ctx, socks5.CmdConnect, lAddr.Network(), "127.0.0.1:1080")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,73 +77,110 @@ func TestSocks5_Connect(t *testing.T) {
 }
 
 func TestA(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+
+	const (
+		ftpAddr   = "127.0.0.1:21"
+		ftpUser   = "user"
+		ftpPass   = "password"
+		socksAddr = "127.0.0.1:1080"
+	)
+
+	ctx := context.Background()
+	p1, err := proxy.Socks5(ctx, socks5.CmdConnect, "tcp", "127.0.0.1:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn1, err := p1.Dial("tcp", ftpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdConn1 := bufio.NewReader(conn1)
+
+	_, err = conn1.Write([]byte("USER " + ftpUser + "\015\012"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line1, _, err := rdConn1.ReadLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("line1:", string(line1))
+
+	_, err = conn1.Write([]byte("PASS " + ftpPass + "\015\012"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line2, _, err := rdConn1.ReadLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("line2:", string(line2))
+
+	p2, err := proxy.Socks5(ctx, socks5.CmdBind, "tcp", "127.0.0.1:1080")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	go func() {
-		conn, err := ln.Accept()
+	ln, err := p2.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bindAddr := ln.Addr()
+	fmt.Printf("%#v\n", bindAddr)
+
+	host, port, _ := net.SplitHostPort(bindAddr.String())
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block1, block2 := int(p>>8), int(p)
+
+	joined := strings.Join(
+		append(
+			strings.Split(host, "."),
+			fmt.Sprintf("%v,%v", byte(block1), byte(block2)),
+		),
+		",",
+	)
+	fmt.Println(joined)
+
+	_, err = conn1.Write([]byte("PORT " + joined + "\015\012"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	line3, _, err := rdConn1.ReadLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("line3:", string(line3))
+
+	_, err = conn1.Write([]byte("LIST /\015\012"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn2, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdConn2 := bufio.NewReader(conn2)
+
+	for {
+		line, _, err := rdConn2.ReadLine()
 		if err != nil {
-			panic(err)
+			if err == io.EOF {
+				break
+			}
+			t.Fatal(err)
 		}
-
-		ln2, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			panic(err)
-		}
-		addr := ln2.Addr()
-		b := []byte(
-			addr.Network() + "," + addr.String(),
-		)
-		if _, err := conn.Write(b); err != nil {
-			panic(err)
-		}
-
-		conn2, err := ln2.Accept()
-		if err != nil {
-			panic(err)
-		}
-		if _, err := io.Copy(conn2, conn2); err != nil {
-			panic(err)
-		}
-
-		conn.Close()
-		conn2.Close()
-	}()
-
-	addr := ln.Addr()
-	conn, err := net.Dial(addr.Network(), addr.String())
-	if err != nil {
-		t.Fatal(err)
+		fmt.Println(string(line))
 	}
 
-	b := make([]byte, 100)
-	n, err := conn.Read(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	addrSlice := strings.Split(string(b[:n]), ",")
-	network, address := addrSlice[0], addrSlice[1]
-
-	conn2, err := net.Dial(network, address)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := conn2.Write([]byte("OK")); err != nil {
-		t.Fatal(err)
-	}
-
-	resp := make([]byte, 2)
-	n2, err := conn2.Read(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(resp[:n2]); got != "OK" {
-		t.Fatalf("got %s, but want `OK`", got)
-	}
+	// if got := string(line); got != "OK" {
+	// 	t.Fatalf("%s", got)
+	// }
 }
 
 // func TestSocks5_Bind(t *testing.T) {
