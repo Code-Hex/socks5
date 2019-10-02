@@ -79,14 +79,24 @@ func TestSocks5_Connect(t *testing.T) {
 func TestA(t *testing.T) {
 
 	const (
-		ftpAddr   = "127.0.0.1:21"
-		ftpUser   = "user"
-		ftpPass   = "password"
-		socksAddr = "127.0.0.1:1080"
+		ftpAddr = "127.0.0.1:21"
+		ftpUser = "user"
+		ftpPass = "password"
 	)
+	socks5Ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	socksAddr := socks5Ln.Addr().String()
+
+	go func() {
+		if err := server.New(nil).Serve(socks5Ln); err != nil {
+			panic(err)
+		}
+	}()
 
 	ctx := context.Background()
-	p1, err := proxy.Socks5(ctx, socks5.CmdConnect, "tcp", "127.0.0.1:1080")
+	p1, err := proxy.Socks5(ctx, socks5.CmdConnect, "tcp", socksAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +126,7 @@ func TestA(t *testing.T) {
 	}
 	fmt.Println("line2:", string(line2))
 
-	p2, err := proxy.Socks5(ctx, socks5.CmdBind, "tcp", "127.0.0.1:1080")
+	p2, err := proxy.Socks5(ctx, socks5.CmdBind, "tcp", socksAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +173,7 @@ func TestA(t *testing.T) {
 
 	conn2, err := ln.Accept()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("accept err: %v", err)
 	}
 	rdConn2 := bufio.NewReader(conn2)
 

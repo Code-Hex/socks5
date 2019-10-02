@@ -21,7 +21,8 @@ type Request struct {
 	Command  socks5.Command
 	DestAddr *address.Addr
 
-	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	Listen      func(ctx context.Context, network, address string) (net.Listener, error)
 }
 
 // NewRequest returns request
@@ -53,6 +54,7 @@ func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
 		DestAddr: addr,
 
 		DialContext: s.config.DialContext,
+		Listen:      s.config.Listen,
 	}, nil
 }
 
@@ -61,7 +63,7 @@ func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
 	case socks5.CmdConnect:
 		err = r.connect(ctx, conn)
 	case socks5.CmdBind:
-		fallthrough
+		err = r.bind(ctx, conn)
 	case socks5.CmdUDPAssociate:
 		fallthrough
 	default:
@@ -189,39 +191,36 @@ func (r *Request) connect(ctx context.Context, conn net.Conn) error {
 }
 
 func (r *Request) bind(ctx context.Context, conn net.Conn) error {
-	// address := r.DestAddr.String()
-	// addr, err := net.ResolveIPAddr("tcp", address)
-	// if err != nil {
-	// 	return err
-	// }
-	// ln, err := net.Listen("tcp", addr.String())
-	// if err != nil {
-	// 	return err
-	// }
+	dest := r.DestAddr.String()
+	target, err := r.DialContext(ctx, "tcp", dest)
+	if err != nil {
+		return err
+	}
+	defer target.Close()
 
-	// host, p, _ := net.SplitHostPort(ln.Addr().String())
-	// port, _ := strconv.Atoi(p)
-	// bind := &address.Addr{
-	// 	Host: host,
-	// 	Port: port,
-	// }
+	ln, err := r.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
 
-	// // TODO(codehex): it should pass the local address information?
-	// if err := r.reply(conn, socks5.StatusSucceeded, bind); err != nil {
-	// 	return fmt.Errorf("failed to send reply: %v", err)
-	// }
+	host, p, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(p)
+	bind := &address.Addr{
+		Host: host,
+		Port: port,
+	}
 
-	// c, err := ln.Accept()
-	// if err != nil {
-	// 	return err
-	// }
+	// TODO(codehex): it should pass the local address information?
+	if err := r.reply(conn, socks5.StatusSucceeded, bind); err != nil {
+		return fmt.Errorf("failed to send reply: %v", err)
+	}
 
-	// rConn, wConn := net.Pipe()
+	c, err := ln.Accept()
+	if err != nil {
+		return err
+	}
 
-	// transport(rConn, c)
-	// transport(wConn, conn)
-
-	return nil
+	return transport(target, c)
 }
 
 func transport(dst, src io.ReadWriter) error {
