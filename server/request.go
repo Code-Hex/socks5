@@ -191,8 +191,8 @@ func (r *Request) connect(ctx context.Context, conn net.Conn) error {
 }
 
 func (r *Request) bind(ctx context.Context, conn net.Conn) error {
-	dest := r.DestAddr.String()
-	target, err := r.DialContext(ctx, "tcp", dest)
+	dest := r.DestAddr
+	target, err := r.DialContext(ctx, dest.Network(), dest.String())
 	if err != nil {
 		return err
 	}
@@ -203,8 +203,16 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 
-	host, p, _ := net.SplitHostPort(ln.Addr().String())
-	port, _ := strconv.Atoi(p)
+	host, p, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		return err
+	}
+
+	port, err := strconv.Atoi(p)
+	if err != nil {
+		return err
+	}
+
 	bind := &address.Addr{
 		Host: host,
 		Port: port,
