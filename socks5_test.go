@@ -9,8 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,16 +18,7 @@ import (
 )
 
 func TestSocks5_Connect(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	go func() {
-		if err := server.New(nil).Serve(ln); err != nil {
-			panic(err)
-		}
-	}()
+	socks5Ln := socks5Server(t)
 
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -48,10 +37,10 @@ func TestSocks5_Connect(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	lAddr := ln.Addr()
+	lAddr := socks5Ln.Addr()
 	log.Println("socks", lAddr.String())
 	ctx := context.Background()
-	p, err := proxy.Socks5(ctx, socks5.CmdConnect, lAddr.Network(), "127.0.0.1:1080")
+	p, err := proxy.Socks5(ctx, socks5.CmdConnect, lAddr.Network(), lAddr.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,186 +65,109 @@ func TestSocks5_Connect(t *testing.T) {
 	}
 }
 
-func TestA(t *testing.T) {
-
-	const (
-		ftpAddr = "127.0.0.1:21"
-		ftpUser = "user"
-		ftpPass = "password"
-	)
-	socks5Ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	socksAddr := socks5Ln.Addr().String()
-
-	go func() {
-		if err := server.New(nil).Serve(socks5Ln); err != nil {
-			panic(err)
-		}
-	}()
-
+func TestSocks5_Bind(t *testing.T) {
+	socks5Ln := socks5Server(t)
 	ctx := context.Background()
-	p1, err := proxy.Socks5(ctx, socks5.CmdConnect, "tcp", socksAddr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn1, err := p1.Dial("tcp", ftpAddr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rdConn1 := bufio.NewReader(conn1)
+	socks5Addr := socks5Ln.Addr()
 
-	_, err = conn1.Write([]byte("USER " + ftpUser + "\015\012"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	line1, _, err := rdConn1.ReadLine()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Println("line1:", string(line1))
-
-	_, err = conn1.Write([]byte("PASS " + ftpPass + "\015\012"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	line2, _, err := rdConn1.ReadLine()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Println("line2:", string(line2))
-
-	p2, err := proxy.Socks5(ctx, socks5.CmdBind, "tcp", socksAddr)
+	dialer, err := proxy.Socks5(ctx, socks5.CmdConnect, socks5Addr.Network(), socks5Addr.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ln, err := p2.Listen("tcp", "127.0.0.1:0")
+	echoLn, waitCh := echoBindServer(t)
+	echoAddr := echoLn.Addr()
+	conn1, err := dialer.Dial(echoAddr.Network(), echoAddr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn1.Close()
+
+	dialer2, err := proxy.Socks5(ctx, socks5.CmdBind, socks5Addr.Network(), socks5Addr.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bindAddr := ln.Addr()
-	fmt.Printf("%#v\n", bindAddr)
-
-	host, port, _ := net.SplitHostPort(bindAddr.String())
-	p, err := strconv.Atoi(port)
+	ln, err := dialer2.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	block1, block2 := int(p>>8), int(p)
-
-	joined := strings.Join(
-		append(
-			strings.Split(host, "."),
-			fmt.Sprintf("%v,%v", byte(block1), byte(block2)),
-		),
-		",",
-	)
-	fmt.Println(joined)
-
-	_, err = conn1.Write([]byte("PORT " + joined + "\015\012"))
+	addr := ln.Addr()
+	_, err = conn1.Write([]byte(addr.String() + "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	line3, _, err := rdConn1.ReadLine()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Println("line3:", string(line3))
+	// wait to dial tcp from echo bind server
+	<-waitCh
 
-	_, err = conn1.Write([]byte("LIST /\015\012"))
+	want := "OK"
+	_, err = conn1.Write([]byte(want))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	conn2, err := ln.Accept()
 	if err != nil {
-		t.Fatalf("accept err: %v", err)
+		t.Fatal(err)
 	}
-	rdConn2 := bufio.NewReader(conn2)
+	defer conn2.Close()
 
-	for {
-		line, _, err := rdConn2.ReadLine()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			t.Fatal(err)
-		}
-		fmt.Println(string(line))
+	buf := make([]byte, 2)
+	if _, err := conn2.Read(buf); err != nil {
+		t.Fatal(err)
 	}
-
-	// if got := string(line); got != "OK" {
-	// 	t.Fatalf("%s", got)
-	// }
+	got := string(buf)
+	if want != got {
+		t.Fatalf("want %s, but got %s", want, got)
+	}
 }
 
-// func TestSocks5_Bind(t *testing.T) {
-// 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-// 	if err != nil {
-// 		t.Fatalf("err: %v", err)
-// 	}
-// 	go func() {
-// 		if err := New(nil).Serve(ln); err != nil {
-// 			panic(err)
-// 		}
-// 	}()
+func socks5Server(t *testing.T) net.Listener {
+	t.Helper()
+	socks5Ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	go func() {
+		if err := server.New(nil).Serve(socks5Ln); err != nil {
+			panic(err)
+		}
+	}()
+	return socks5Ln
+}
 
-// 	lAddr := ln.Addr()
-// 	log.Println("socks", lAddr.String())
-// 	p, err := proxy.SOCKS5(lAddr.Network(), "127.0.0.1:9150", nil, proxy.Direct)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+func echoBindServer(t *testing.T) (net.Listener, chan struct{}) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-// 	addr := echoServerOnce(t)
-// 	conn, err := p.Dial("tcp", addr.String())
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if _, err := conn.Write([]byte("OK")); err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-// 		tcpConn.CloseWrite()
-// 	}
-// 	var buf bytes.Buffer
-// 	if _, err := io.Copy(&buf, conn); err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if buf.String() != "OK" {
-// 		t.Fatalf(`got %s, but want "OK"`, buf.String())
-// 	}
-// }
+	waitCh := make(chan struct{})
+	go func() {
+		conn1, err := ln.Accept()
+		if err != nil {
+			panic(err)
+		}
+		defer conn1.Close()
 
-// func echoServerOnce(t *testing.T) net.Addr {
-// 	t.Helper()
-// 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+		rdConn1 := bufio.NewReader(conn1)
+		line, _, err := rdConn1.ReadLine()
+		if err != nil {
+			panic(err)
+		}
+		conn2, err := net.Dial("tcp", string(line))
+		if err != nil {
+			panic(err)
+		}
+		defer conn2.Close()
 
-// 	go func() {
-// 		conn, err := ln.Accept()
-// 		if err != nil {
-// 			panic(err)
-// 		}
-// 		if err := echo(conn); err != nil {
-// 			panic(err)
-// 		}
-// 	}()
-
-// 	return ln.Addr()
-// }
-
-// func echo(conn net.Conn) error {
-// 	defer conn.Close()
-// 	_, err := io.Copy(conn, conn)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	return nil
-// }
+		close(waitCh)
+		if _, err := io.Copy(conn2, conn1); err != nil {
+			panic(err)
+		}
+	}()
+	<-time.After(time.Second)
+	return ln, waitCh
+}
