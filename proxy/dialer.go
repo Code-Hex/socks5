@@ -14,8 +14,8 @@ import (
 	"github.com/Code-Hex/socks5/internal/address"
 )
 
-// A Dialer holds SOCKS-specific options.
-type Dialer struct {
+// A DialListener holds SOCKS-specific options.
+type DialListener struct {
 	cmd              socks5.Command // either CmdConnect or cmdBind
 	network, address string         // these fields for socks5
 
@@ -24,7 +24,7 @@ type Dialer struct {
 
 var ErrCommandUnimplemented = errors.New("command is unimplemented in proxy")
 
-func Socks5(ctx context.Context, cmd socks5.Command, network, address string) (*Dialer, error) {
+func Socks5(ctx context.Context, cmd socks5.Command, network, address string) (*DialListener, error) {
 	switch cmd {
 	case socks5.CmdConnect,
 		socks5.CmdBind:
@@ -36,19 +36,18 @@ func Socks5(ctx context.Context, cmd socks5.Command, network, address string) (*
 			Err:  ErrCommandUnimplemented,
 		}
 	}
-	dialer := &Dialer{
+	return &DialListener{
 		cmd:     cmd,
 		network: network,
 		address: address,
-	}
-	return dialer, nil
+	}, nil
 }
 
-func (d *Dialer) Dial(network, address string) (net.Conn, error) {
+func (d *DialListener) Dial(network, address string) (net.Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
 
-func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (d *DialListener) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	if len(d.AuthMethods) == 0 {
 		d.AuthMethods = map[auth.Method]auth.Authenticator{
 			auth.MethodNotRequired: &NotRequired{},
@@ -65,7 +64,7 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 	return conn, nil
 }
 
-func (d *Dialer) send(ctx context.Context, conn net.Conn, address string) error {
+func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) error {
 	if deadline, ok := ctx.Deadline(); ok && !deadline.IsZero() {
 		conn.SetDeadline(deadline)
 		defer conn.SetDeadline(time.Time{})
@@ -86,7 +85,7 @@ func (d *Dialer) send(ctx context.Context, conn net.Conn, address string) error 
 	return nil
 }
 
-func (d *Dialer) sendCommand(c net.Conn, bytes []byte, host string, port int) error {
+func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port int) error {
 	bytes = bytes[:0]
 	// +----+-----+-------+------+----------+----------+
 	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -127,7 +126,7 @@ func (d *Dialer) sendCommand(c net.Conn, bytes []byte, host string, port int) er
 	return d.readReply(c, bytes)
 }
 
-func (d *Dialer) readReply(c net.Conn, b []byte) error {
+func (d *DialListener) readReply(c net.Conn, b []byte) error {
 	if _, err := io.ReadFull(c, b[:4]); err != nil {
 		return err
 	}
@@ -143,14 +142,11 @@ func (d *Dialer) readReply(c net.Conn, b []byte) error {
 
 	l := 2 // for port
 
-	var ip net.IP
 	switch b[3] {
 	case address.TypeIPv4:
 		l += net.IPv4len
-		ip = make(net.IP, net.IPv4len)
 	case address.TypeIPv6:
 		l += net.IPv6len
-		ip = make(net.IP, net.IPv6len)
 	case address.TypeFQDN:
 		// Read 2 bytes
 		// First off, read length of the fqdn, then read fqdn string
@@ -170,22 +166,10 @@ func (d *Dialer) readReply(c net.Conn, b []byte) error {
 		return err
 	}
 
-	var host string
-	if ip != nil {
-		copy(ip, b)
-		host = ip.String()
-	} else {
-		host = string(b[:len(b)-2])
-	}
-	portNum := int(b[len(b)-2])<<8 | int(b[len(b)-1])
-	port := strconv.Itoa(portNum)
-	address := net.JoinHostPort(host, port)
-	_ = address
-
 	return nil
 }
 
-func (d *Dialer) authenticate(c net.Conn, bytes []byte) error {
+func (d *DialListener) authenticate(c net.Conn, bytes []byte) error {
 	methodNum := len(d.AuthMethods)
 	if methodNum > 255 {
 		return errors.New("too many authentication methods")
@@ -213,7 +197,7 @@ func (d *Dialer) authenticate(c net.Conn, bytes []byte) error {
 	return d.assignAuthMethod(c, auth.Method(bytes[1]))
 }
 
-func (d *Dialer) assignAuthMethod(c net.Conn, method auth.Method) error {
+func (d *DialListener) assignAuthMethod(c net.Conn, method auth.Method) error {
 	if method == auth.MethodNoAcceptableMethods {
 		return errors.New("no acceptable authentication methods")
 	}
@@ -225,7 +209,7 @@ func (d *Dialer) assignAuthMethod(c net.Conn, method auth.Method) error {
 	return authenticator.Authenticate(c)
 }
 
-func (d *Dialer) newError(err error, network, address string) error {
+func (d *DialListener) newError(err error, network, address string) error {
 	if err == nil {
 		return nil
 	}
