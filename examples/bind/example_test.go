@@ -1,4 +1,4 @@
-package socks5_test
+package main
 
 import (
 	"bufio"
@@ -15,7 +15,7 @@ import (
 	"github.com/Code-Hex/socks5/server"
 )
 
-func ExampleSocks5_Bind() {
+func main() {
 	const (
 		ftpAddr = "127.0.0.1:21"
 		ftpUser = "user"
