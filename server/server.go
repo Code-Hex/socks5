@@ -17,8 +17,9 @@ type Config struct {
 	AuthMethods map[auth.Method]auth.Authenticator
 
 	// Optional.
-	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
-	Listen      func(ctx context.Context, network, address string) (net.Listener, error)
+	DialContext  func(ctx context.Context, network, address string) (net.Conn, error)
+	Listen       func(ctx context.Context, network, address string) (net.Listener, error)
+	ListenPacket func(ctx context.Context, network, address string) (net.PacketConn, error)
 }
 
 func New(c *Config) *Socks5 {
@@ -40,6 +41,12 @@ func New(c *Config) *Socks5 {
 		c.Listen = func(ctx context.Context, network, address string) (net.Listener, error) {
 			var l net.ListenConfig
 			return l.Listen(ctx, network, address)
+		}
+	}
+	if c.ListenPacket == nil {
+		c.ListenPacket = func(ctx context.Context, network, address string) (net.PacketConn, error) {
+			var l net.ListenConfig
+			return l.ListenPacket(ctx, network, address)
 		}
 	}
 	return &Socks5{
@@ -71,6 +78,17 @@ func (s *Socks5) ListenAndServe(network, addr string) error {
 // Serve is used to serve connections from a listener
 func (s *Socks5) Serve(l net.Listener) error {
 	ctx := context.Background()
+	pc, err := net.ListenPacket("udp", l.Addr().String())
+	if err != nil {
+		return err
+	}
+	go func() {
+		if err := s.serveUDPConn(ctx, pc); err != nil {
+			log.Printf("socks5: error(udp) %v", err)
+		}
+		log.Println("done udp serve")
+	}()
+
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
 		select {
@@ -99,15 +117,31 @@ func (s *Socks5) Serve(l net.Listener) error {
 		tempDelay = 0
 
 		go func() {
-			if err := s.serveConn(ctx, conn); err != nil {
-				log.Printf("socks5: error %v", err)
+			if err := s.serveTCPConn(ctx, conn); err != nil {
+				log.Printf("socks5: error(tcp) %v", err)
 			}
-			log.Println("done serve")
+			log.Println("done tcp serve")
 		}()
 	}
 }
 
-func (s *Socks5) serveConn(ctx context.Context, conn net.Conn) error {
+func (s *Socks5) Shutdown(ctx context.Context) error {
+	s.onceShutdown.Do(func() {
+		close(s.shutdown)
+		go func() {
+			s.wg.Wait()
+			close(s.waitingDone)
+		}()
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.waitingDone:
+	}
+	return nil
+}
+
+func (s *Socks5) serveTCPConn(ctx context.Context, conn net.Conn) error {
 	s.wg.Add(1)
 	defer func() {
 		s.wg.Done()
@@ -126,18 +160,21 @@ func (s *Socks5) serveConn(ctx context.Context, conn net.Conn) error {
 	return req.do(ctx, conn)
 }
 
-func (s *Socks5) Shutdown(ctx context.Context) error {
-	s.onceShutdown.Do(func() {
-		close(s.shutdown)
+// maxBufferSize specifies the size of the buffers that
+// are used to temporarily hold data from the UDP packets
+// that we receive.
+const maxBufferSize = 1024
+
+func (s *Socks5) serveUDPConn(ctx context.Context, conn net.PacketConn) error {
+	for {
+		buf := make([]byte, maxBufferSize)
+		n, src, err := conn.ReadFrom(buf)
+		if err != nil {
+			return err
+		}
+		//buf = buf[:n]
 		go func() {
-			s.wg.Wait()
-			close(s.waitingDone)
+
 		}()
-	})
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.waitingDone:
 	}
-	return nil
 }

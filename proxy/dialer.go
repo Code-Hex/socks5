@@ -27,7 +27,8 @@ var ErrCommandUnimplemented = errors.New("command is unimplemented in proxy")
 func Socks5(ctx context.Context, cmd socks5.Command, network, address string) (*DialListener, error) {
 	switch cmd {
 	case socks5.CmdConnect,
-		socks5.CmdBind:
+		socks5.CmdBind,
+		socks5.CmdUDPAssociate:
 	default:
 		return nil, &net.OpError{
 			Op:   cmd.String(),

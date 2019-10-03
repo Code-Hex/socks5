@@ -21,8 +21,9 @@ type Request struct {
 	Command  socks5.Command
 	DestAddr *address.Addr
 
-	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
-	Listen      func(ctx context.Context, network, address string) (net.Listener, error)
+	DialContext  func(ctx context.Context, network, address string) (net.Conn, error)
+	Listen       func(ctx context.Context, network, address string) (net.Listener, error)
+	ListenPacket func(ctx context.Context, network, address string) (net.PacketConn, error)
 }
 
 // NewRequest returns request
@@ -72,7 +73,7 @@ func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
 
 	if err != nil {
 		status := replyStatusByErr(err)
-		if err := r.reply(conn, status, nil); err != nil {
+		if err := reply(conn, status, nil); err != nil {
 			return fmt.Errorf("failed to reply: %v", err)
 		}
 		return err
@@ -105,7 +106,7 @@ func replyStatusByErr(err error) socks5.Reply {
 	return socks5.StatusGeneralServerFailure
 }
 
-func (r *Request) reply(conn io.Writer, reply socks5.Reply, addr net.Addr) error {
+func reply(conn io.Writer, reply socks5.Reply, addr net.Addr) error {
 	var (
 		addrType, addrPort int
 		addrBody           []byte
@@ -183,7 +184,7 @@ func (r *Request) connect(ctx context.Context, conn net.Conn) error {
 	defer target.Close()
 
 	// TODO(codehex): it should pass the local address information?
-	if err := r.reply(conn, socks5.StatusSucceeded, nil); err != nil {
+	if err := reply(conn, socks5.StatusSucceeded, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
@@ -219,7 +220,7 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 	}
 
 	// TODO(codehex): it should pass the local address information?
-	if err := r.reply(conn, socks5.StatusSucceeded, bind); err != nil {
+	if err := reply(conn, socks5.StatusSucceeded, bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
