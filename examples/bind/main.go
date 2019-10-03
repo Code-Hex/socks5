@@ -12,29 +12,18 @@ import (
 
 	"github.com/Code-Hex/socks5"
 	"github.com/Code-Hex/socks5/proxy"
-	"github.com/Code-Hex/socks5/server"
 )
 
 func main() {
 	const (
-		ftpAddr = "127.0.0.1:21"
-		ftpUser = "user"
-		ftpPass = "password"
+		socks5Addr = "127.0.0.1:1080"
+		ftpAddr    = "127.0.0.1:21"
+		ftpUser    = "user"
+		ftpPass    = "password"
 	)
-	socks5Ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatalf("err: %v", err)
-	}
-	socksAddr := socks5Ln.Addr().String()
-
-	go func() {
-		if err := server.New(nil).Serve(socks5Ln); err != nil {
-			panic(err)
-		}
-	}()
 
 	ctx := context.Background()
-	p1, err := proxy.Socks5(ctx, socks5.CmdConnect, "tcp", socksAddr)
+	p1, err := proxy.Socks5(ctx, socks5.CmdConnect, "tcp", socks5Addr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -64,7 +53,7 @@ func main() {
 	}
 	log.Println("line2:", string(line2))
 
-	p2, err := proxy.Socks5(ctx, socks5.CmdBind, "tcp", socksAddr)
+	p2, err := proxy.Socks5(ctx, socks5.CmdBind, "tcp", socks5Addr)
 	if err != nil {
 		log.Fatal(err)
 	}
