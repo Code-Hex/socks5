@@ -54,19 +54,18 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 			auth.MethodNotRequired: &NotRequired{},
 		}
 	}
-	conn, err := d.send(ctx, network, address)
-	if err != nil {
-		return nil, d.newError(err, network, address)
-	}
-	return conn, nil
-}
-
-func (d *Dialer) send(ctx context.Context, network, address string) (net.Conn, error) {
 	var netDialer net.Dialer
 	conn, err := netDialer.DialContext(ctx, d.network, d.address)
 	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
+	if err := d.send(ctx, conn, address); err != nil {
+		return nil, d.newError(err, network, address)
+	}
+	return conn, nil
+}
+
+func (d *Dialer) send(ctx context.Context, conn net.Conn, address string) error {
 	if deadline, ok := ctx.Deadline(); ok && !deadline.IsZero() {
 		conn.SetDeadline(deadline)
 		defer conn.SetDeadline(time.Time{})
@@ -74,20 +73,20 @@ func (d *Dialer) send(ctx context.Context, network, address string) (net.Conn, e
 
 	host, port, err := splitHostPort(address)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	b := make([]byte, 0, 6+len(host)) // the size here is just an estimate
 	if err := d.authenticate(conn, b); err != nil {
-		return nil, err
+		return err
 	}
 	if err := d.sendCommand(conn, b, host, port); err != nil {
-		return nil, err
+		return err
 	}
-	return conn, nil
+	return nil
 }
 
-func (d *Dialer) sendCommand(c io.ReadWriter, bytes []byte, host string, port int) error {
+func (d *Dialer) sendCommand(c net.Conn, bytes []byte, host string, port int) error {
 	bytes = bytes[:0]
 	// +----+-----+-------+------+----------+----------+
 	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -128,7 +127,7 @@ func (d *Dialer) sendCommand(c io.ReadWriter, bytes []byte, host string, port in
 	return d.readReply(c, bytes)
 }
 
-func (d *Dialer) readReply(c io.ReadWriter, b []byte) error {
+func (d *Dialer) readReply(c net.Conn, b []byte) error {
 	if _, err := io.ReadFull(c, b[:4]); err != nil {
 		return err
 	}
@@ -181,11 +180,12 @@ func (d *Dialer) readReply(c io.ReadWriter, b []byte) error {
 	portNum := int(b[len(b)-2])<<8 | int(b[len(b)-1])
 	port := strconv.Itoa(portNum)
 	address := net.JoinHostPort(host, port)
-	_ = newAddr(address, "socks5") // is it unnecessary ??
+	_ = address
+
 	return nil
 }
 
-func (d *Dialer) authenticate(c io.ReadWriter, bytes []byte) error {
+func (d *Dialer) authenticate(c net.Conn, bytes []byte) error {
 	methodNum := len(d.AuthMethods)
 	if methodNum > 255 {
 		return errors.New("too many authentication methods")
@@ -213,7 +213,7 @@ func (d *Dialer) authenticate(c io.ReadWriter, bytes []byte) error {
 	return d.assignAuthMethod(c, auth.Method(bytes[1]))
 }
 
-func (d *Dialer) assignAuthMethod(c io.ReadWriter, method auth.Method) error {
+func (d *Dialer) assignAuthMethod(c net.Conn, method auth.Method) error {
 	if method == auth.MethodNoAcceptableMethods {
 		return errors.New("no acceptable authentication methods")
 	}

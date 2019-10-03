@@ -17,7 +17,8 @@ type Config struct {
 	AuthMethods map[auth.Method]auth.Authenticator
 
 	// Optional.
-	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	Listen      func(ctx context.Context, network, address string) (net.Listener, error)
 }
 
 func New(c *Config) *Socks5 {
@@ -30,9 +31,15 @@ func New(c *Config) *Socks5 {
 		}
 	}
 	if c.DialContext == nil {
-		c.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 			var d net.Dialer
-			return d.DialContext(ctx, network, addr)
+			return d.DialContext(ctx, network, address)
+		}
+	}
+	if c.Listen == nil {
+		c.Listen = func(ctx context.Context, network, address string) (net.Listener, error) {
+			var l net.ListenConfig
+			return l.Listen(ctx, network, address)
 		}
 	}
 	return &Socks5{
