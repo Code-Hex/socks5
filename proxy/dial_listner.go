@@ -6,7 +6,7 @@ import (
 
 type listner struct {
 	net.Listener
-	dialer *Dialer
+	dialer *DialListener
 }
 
 func (l *listner) Accept() (net.Conn, error) {
@@ -21,7 +21,7 @@ func (l *listner) Accept() (net.Conn, error) {
 	return l.Listener.Accept()
 }
 
-func (d *Dialer) Listen(network, address string) (net.Listener, error) {
+func (d *DialListener) Listen(network, address string) (net.Listener, error) {
 	ln, err := net.Listen(network, address)
 	if err != nil {
 		return nil, err
