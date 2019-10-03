@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"io"
-	"log"
 	"net"
 	"testing"
 
@@ -18,7 +17,6 @@ func TestSocks5_Connect(t *testing.T) {
 	echoLn := echoConnectServer(t)
 
 	socks5Addr := socks5Ln.Addr()
-	log.Println("socks", socks5Addr.String())
 	ctx := context.Background()
 	p, err := proxy.Socks5(ctx, socks5.CmdConnect, socks5Addr.Network(), socks5Addr.String())
 	if err != nil {
