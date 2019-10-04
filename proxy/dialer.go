@@ -20,6 +20,7 @@ type DialListener struct {
 	network, address string         // these fields for socks5
 
 	AuthMethods map[auth.Method]auth.Authenticator
+	Dialer      net.Dialer
 }
 
 var ErrCommandUnimplemented = errors.New("command is unimplemented in proxy")
@@ -54,8 +55,8 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 			auth.MethodNotRequired: &NotRequired{},
 		}
 	}
-	var netDialer net.Dialer
-	socks5Conn, err := netDialer.DialContext(ctx, d.network, d.address)
+
+	socks5Conn, err := d.Dialer.DialContext(ctx, d.network, d.address)
 	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
@@ -69,7 +70,7 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 		host := destAddr.ip.String()
 		port := strconv.Itoa(destAddr.port)
 		address := net.JoinHostPort(host, port)
-		udpConn, err = netDialer.DialContext(ctx, network, address)
+		udpConn, err = d.Dialer.DialContext(ctx, network, address)
 		if err != nil {
 			return nil, d.newError(err, network, address)
 		}
