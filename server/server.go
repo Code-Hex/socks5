@@ -166,15 +166,16 @@ func (s *Socks5) serveTCPConn(ctx context.Context, conn net.Conn) error {
 const maxBufferSize = 1024
 
 func (s *Socks5) serveUDPConn(ctx context.Context, conn net.PacketConn) error {
-	for {
-		buf := make([]byte, maxBufferSize)
-		n, src, err := conn.ReadFrom(buf)
-		if err != nil {
-			return err
-		}
-		//buf = buf[:n]
-		go func() {
+	// for {
+	// 	buf := make([]byte, maxBufferSize)
+	// 	n, src, err := conn.ReadFrom(buf)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	//buf = buf[:n]
+	// 	go func() {
 
-		}()
-	}
+	// 	}()
+	// }
+	return nil
 }

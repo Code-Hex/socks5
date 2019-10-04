@@ -3,6 +3,7 @@ package socks5_test
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -31,6 +32,36 @@ func TestSocks5_Udp(t *testing.T) {
 	}
 
 	got := string(buf)
+	if want != got {
+		t.Fatalf(`want %s, but got %s`, want, got)
+	}
+}
+
+func TestSocks5_UdpA(t *testing.T) {
+	addr := echoUdpServer(t)
+	ctx := context.Background()
+	dialer, err := proxy.Socks5(ctx, socks5.CmdUDPAssociate, "tcp", "127.0.0.1:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialer.Dial("udp", addr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	want := "OK"
+	if _, err := conn.Write([]byte(want)); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 100)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := string(buf[:n])
 	if want != got {
 		t.Fatalf(`want %s, but got %s`, want, got)
 	}
@@ -199,11 +230,7 @@ func echoBindServer(t *testing.T) (net.Listener, chan struct{}) {
 
 func echoUdpServer(t *testing.T) net.Addr {
 	t.Helper()
-	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn, err := net.ListenUDP("udp", udpAddr)
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,14 +241,16 @@ func echoUdpServer(t *testing.T) net.Addr {
 		buf := make([]byte, 10)
 		nr, addr, err := conn.ReadFrom(buf)
 		if err != nil {
-			t.Fatal(err)
+			panic(err)
 		}
 		nw, err := conn.WriteTo(buf[:nr], addr)
 		if err != nil {
-			t.Fatal(err)
+			panic(err)
 		}
 		if nw != nr {
-			t.Logf("received %d bytes but sent %d\n", nr, nw)
+			panic(
+				fmt.Sprintf("received %d bytes but sent %d\n", nr, nw),
+			)
 		}
 	}()
 	return conn.LocalAddr()

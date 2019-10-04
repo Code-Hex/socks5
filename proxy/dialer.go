@@ -55,17 +55,40 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 		}
 	}
 	var netDialer net.Dialer
-	conn, err := netDialer.DialContext(ctx, d.network, d.address)
+	socks5Conn, err := netDialer.DialContext(ctx, d.network, d.address)
 	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
-	if err := d.send(ctx, conn, address); err != nil {
+	destAddr, err := d.send(ctx, socks5Conn, address)
+	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
-	return conn, nil
+	var udpConn net.Conn
+	switch network {
+	case "udp", "udp4", "udp6":
+		host := destAddr.ip.String()
+		port := strconv.Itoa(destAddr.port)
+		address := net.JoinHostPort(host, port)
+		udpConn, err = netDialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, d.newError(err, network, address)
+		}
+	}
+	host, port, _ := net.SplitHostPort(address)
+	portNum, _ := strconv.Atoi(port)
+	aTyp, ip, _ := addressType(host)
+
+	return &Conn{
+		Conn:       socks5Conn,
+		udpConn:    udpConn,
+		destAddr:   destAddr,
+		targetHost: ip,
+		targetPort: portNum,
+		aTyp:       aTyp,
+	}, nil
 }
 
-func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) error {
+func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) (*destAddr, error) {
 	if deadline, ok := ctx.Deadline(); ok && !deadline.IsZero() {
 		conn.SetDeadline(deadline)
 		defer conn.SetDeadline(time.Time{})
@@ -73,20 +96,17 @@ func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) 
 
 	host, port, err := splitHostPort(address)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	b := make([]byte, 0, 6+len(host)) // the size here is just an estimate
 	if err := d.authenticate(conn, b); err != nil {
-		return err
+		return nil, err
 	}
-	if err := d.sendCommand(conn, b, host, port); err != nil {
-		return err
-	}
-	return nil
+	return d.sendCommand(conn, b, host, port)
 }
 
-func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port int) error {
+func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port int) (*destAddr, error) {
 	bytes = bytes[:0]
 	// +----+-----+-------+------+----------+----------+
 	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -102,11 +122,11 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 			bytes = append(bytes, address.TypeIPv6)
 			bytes = append(bytes, ip6...)
 		} else {
-			return errors.New("unknown address type")
+			return nil, errors.New("unknown address type")
 		}
 	} else {
 		if len(host) > 255 {
-			return errors.New("FQDN is too long")
+			return nil, errors.New("FQDN is too long")
 		}
 		bytes = append(bytes, address.TypeFQDN)
 		bytes = append(bytes, byte(len(host)))
@@ -114,7 +134,7 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 	}
 	bytes = append(bytes, byte(port>>8), byte(port))
 	if _, err := c.Write(bytes); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Reply from server like this format
@@ -127,36 +147,46 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 	return d.readReply(c, bytes)
 }
 
-func (d *DialListener) readReply(c net.Conn, b []byte) error {
+type destAddr struct {
+	ip   net.IP
+	aTyp int
+	port int
+}
+
+func (d *DialListener) readReply(c net.Conn, b []byte) (*destAddr, error) {
 	if _, err := io.ReadFull(c, b[:4]); err != nil {
-		return err
+		return nil, err
 	}
 	if b[0] != socks5.Version {
-		return fmt.Errorf("unexpected protocol version %d", b[0])
+		return nil, fmt.Errorf("unexpected protocol version %d", b[0])
 	}
 	if status := socks5.Reply(b[1]); status != socks5.StatusSucceeded {
-		return errors.New(status.String())
+		return nil, errors.New(status.String())
 	}
 	if b[2] != 0 {
-		return errors.New("non-zero reserved field")
+		return nil, errors.New("non-zero reserved field")
 	}
 
 	l := 2 // for port
 
-	switch b[3] {
+	var ip net.IP
+	var aTyp int
+	switch aTyp = int(b[3]); aTyp {
 	case address.TypeIPv4:
 		l += net.IPv4len
+		ip = make(net.IP, net.IPv4len)
 	case address.TypeIPv6:
 		l += net.IPv6len
+		ip = make(net.IP, net.IPv6len)
 	case address.TypeFQDN:
 		// Read 2 bytes
 		// First off, read length of the fqdn, then read fqdn string
 		if _, err := io.ReadFull(c, b[:1]); err != nil {
-			return err
+			return nil, err
 		}
 		l += int(b[0])
 	default:
-		return fmt.Errorf("unknown address type: %d", int(b[3]))
+		return nil, fmt.Errorf("unknown address type: %d", int(b[3]))
 	}
 	if cap(b) < l {
 		b = make([]byte, l)
@@ -164,10 +194,21 @@ func (d *DialListener) readReply(c net.Conn, b []byte) error {
 		b = b[:l]
 	}
 	if _, err := io.ReadFull(c, b); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	if ip != nil {
+		copy(ip, b)
+	} else {
+		copy(ip, b[:len(b)-2])
+	}
+	port := int(b[len(b)-2])<<8 | int(b[len(b)-1])
+
+	return &destAddr{
+		ip:   ip,
+		aTyp: aTyp,
+		port: port,
+	}, nil
 }
 
 func (d *DialListener) authenticate(c net.Conn, bytes []byte) error {
