@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -94,19 +93,4 @@ func extractUDPData(conn net.Conn, b []byte) (int, error) {
 
 	// extract data
 	return n - l, nil
-}
-
-func addressType(host string) (int, net.IP, error) {
-	if ip := net.ParseIP(host); ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			return address.TypeIPv4, ip4, nil
-		} else if ip6 := ip.To16(); ip6 != nil {
-			return address.TypeIPv6, ip6, nil
-		}
-		return 0, nil, errors.New("unknown address type")
-	}
-	if len(host) > 255 {
-		return 0, nil, errors.New("FQDN is too long")
-	}
-	return address.TypeFQDN, net.IP(host), nil
 }

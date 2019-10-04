@@ -12,6 +12,7 @@ import (
 	"github.com/Code-Hex/socks5"
 	"github.com/Code-Hex/socks5/auth"
 	"github.com/Code-Hex/socks5/internal/address"
+	"github.com/Code-Hex/socks5/internal/addrutil"
 )
 
 // A DialListener holds SOCKS-specific options.
@@ -75,17 +76,22 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 			return nil, d.newError(err, network, address)
 		}
 	}
-	host, port, _ := net.SplitHostPort(address)
-	portNum, _ := strconv.Atoi(port)
-	aTyp, ip, _ := addressType(host)
+	host, port, err := addrutil.SplitHostPort(address)
+	if err != nil {
+		return nil, d.newError(err, network, address)
+	}
+	aTyp, ip, err := addrutil.GetAddressInfo(host)
+	if err != nil {
+		return nil, d.newError(err, network, address)
+	}
 
 	return &Conn{
 		Conn:       socks5Conn,
 		udpConn:    udpConn,
 		destAddr:   destAddr,
 		targetHost: ip,
-		targetPort: portNum,
-		aTyp:       aTyp,
+		targetPort: port,
+		aTyp:       int(aTyp),
 	}, nil
 }
 
@@ -95,7 +101,7 @@ func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) 
 		defer conn.SetDeadline(time.Time{})
 	}
 
-	host, port, err := splitHostPort(address)
+	host, port, err := addrutil.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
@@ -115,24 +121,20 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 	// | 1  |  1  | X'00' |  1   | Variable |    2     |
 	// +----+-----+-------+------+----------+----------+
 	bytes = append(bytes, socks5.Version, byte(d.cmd), 0)
-	if ip := net.ParseIP(host); ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			bytes = append(bytes, address.TypeIPv4)
-			bytes = append(bytes, ip4...)
-		} else if ip6 := ip.To16(); ip6 != nil {
-			bytes = append(bytes, address.TypeIPv6)
-			bytes = append(bytes, ip6...)
-		} else {
-			return nil, errors.New("unknown address type")
-		}
-	} else {
-		if len(host) > 255 {
-			return nil, errors.New("FQDN is too long")
-		}
-		bytes = append(bytes, address.TypeFQDN)
+	aTyp, addr, err := addrutil.GetAddressInfo(host)
+	if err != nil {
+		return nil, err
+	}
+
+	bytes = append(bytes, aTyp)
+
+	if aTyp == address.TypeFQDN {
 		bytes = append(bytes, byte(len(host)))
 		bytes = append(bytes, host...)
+	} else {
+		bytes = append(bytes, addr...)
 	}
+
 	bytes = append(bytes, byte(port>>8), byte(port))
 	if _, err := c.Write(bytes); err != nil {
 		return nil, err
@@ -169,10 +171,11 @@ func (d *DialListener) readReply(c net.Conn, b []byte) (*destAddr, error) {
 	}
 
 	l := 2 // for port
+	aTyp := int(b[3])
 
 	var ip net.IP
-	var aTyp int
-	switch aTyp = int(b[3]); aTyp {
+
+	switch aTyp {
 	case address.TypeIPv4:
 		l += net.IPv4len
 		ip = make(net.IP, net.IPv4len)
@@ -263,19 +266,4 @@ func (d *DialListener) newError(err error, network, address string) error {
 		Addr:   newAddr(address, network),
 		Err:    err,
 	}
-}
-
-func splitHostPort(address string) (string, int, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return "", 0, err
-	}
-	portnum, err := strconv.Atoi(port)
-	if err != nil {
-		return "", 0, err
-	}
-	if 1 > portnum || portnum > 0xffff {
-		return "", 0, fmt.Errorf("port number out of range: %d", portnum)
-	}
-	return host, portnum, nil
 }
