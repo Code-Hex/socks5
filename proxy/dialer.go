@@ -46,11 +46,11 @@ func Socks5(ctx context.Context, cmd socks5.Command, network, address string) (*
 	}, nil
 }
 
-func (d *DialListener) Dial(network, address string) (net.Conn, error) {
+func (d *DialListener) Dial(network, address string) (*Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
 
-func (d *DialListener) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (d *DialListener) DialContext(ctx context.Context, network, address string) (*Conn, error) {
 	if len(d.AuthMethods) == 0 {
 		d.AuthMethods = map[auth.Method]auth.Authenticator{
 			auth.MethodNotRequired: &NotRequired{},

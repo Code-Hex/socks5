@@ -7,6 +7,8 @@ import (
 	"github.com/Code-Hex/socks5/internal/udputil"
 )
 
+var _ net.Conn = (*Conn)(nil)
+
 type Conn struct {
 	net.Conn
 	UDPConn net.Conn
