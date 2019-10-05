@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"syscall"
 
 	"github.com/Code-Hex/socks5"
@@ -120,37 +119,18 @@ func reply(conn io.Writer, reply socks5.Reply, addr *address.Info) error {
 		addrPort = 0
 		addrBody = make([]byte, 4)
 	default:
-		host, p, err := net.SplitHostPort(addr.String())
-		if err != nil {
-			return err
-		}
-		port, err := strconv.Atoi(p)
-		if err != nil {
-			return err
-		}
-		addrPort = port
-
-		if ip := net.ParseIP(host); ip != nil {
-			if ip4 := ip.To4(); ip4 != nil {
-				addrType = address.TypeIPv4
-				addrBody = ip4
-			} else if ip6 := ip.To16(); ip6 != nil {
-				addrType = address.TypeIPv6
-				addrBody = ip6
-			} else {
-				return errors.New("unknown address type")
-			}
-		} else {
-			if len(host) > 255 {
-				return errors.New("FQDN too long")
-			}
-			addrType = address.TypeFQDN
+		addrPort = addr.Port
+		addrType = addr.Type
+		if addrType == address.TypeFQDN {
+			host := addr.Host
 			addrBody = append(
 				[]byte{
 					byte(len(host)),
 				},
 				[]byte(host)...,
 			)
+		} else {
+			addrBody = addr.Host
 		}
 	}
 
@@ -206,14 +186,20 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 
-	host, port, err := addrutil.SplitHostPort(ln.Addr().String())
+	hostStr, port, err := addrutil.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		return err
+	}
+
+	aTyp, host, err := addrutil.GetAddressInfo(hostStr)
 	if err != nil {
 		return err
 	}
 
 	bind := &address.Info{
-		Host: []byte(host),
+		Host: host,
 		Port: port,
+		Type: aTyp,
 	}
 
 	// TODO(codehex): it should pass the local address information?
