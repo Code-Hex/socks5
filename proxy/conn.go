@@ -10,30 +10,31 @@ import (
 
 type Conn struct {
 	net.Conn
-	udpConn    net.Conn
+	UDPConn net.Conn
+
 	targetHost net.IP
 	targetPort int
 	aTyp       address.Type
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
-	if c.udpConn != nil {
-		return extractUDPData(c.udpConn, b)
+	if c.UDPConn != nil {
+		return extractUDPData(c.UDPConn, b)
 	}
 	return c.Conn.Read(b)
 }
 
 func (c *Conn) Write(b []byte) (n int, err error) {
-	if c.udpConn != nil {
+	if c.UDPConn != nil {
 		buf := createUDPFrame(c.aTyp, c.targetPort, c.targetHost, b)
-		return c.udpConn.Write(buf)
+		return c.UDPConn.Write(buf)
 	}
 	return c.Conn.Write(b)
 }
 
 func (c *Conn) Close() error {
-	if c.udpConn != nil {
-		c.udpConn.Close()
+	if c.UDPConn != nil {
+		c.UDPConn.Close()
 	}
 	return c.Conn.Close()
 }

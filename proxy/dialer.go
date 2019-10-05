@@ -85,7 +85,7 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 
 	return &Conn{
 		Conn:       socks5Conn,
-		udpConn:    udpConn,
+		UDPConn:    udpConn,
 		targetHost: ip,
 		targetPort: port,
 		aTyp:       aTyp,
