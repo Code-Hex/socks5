@@ -219,7 +219,20 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 	return transport(target, c)
 }
 
-const maxBuffer = 102
+func transport(dst, src io.ReadWriter) error {
+	var eg errgroup.Group
+	eg.Go(func() error {
+		_, err := io.Copy(dst, src)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := io.Copy(src, dst)
+		return err
+	})
+	return eg.Wait()
+}
+
+const maxBufferSize = 1024
 
 func (r *Request) udpAssociate(ctx context.Context, conn net.Conn) error {
 	udpConn, err := net.ListenUDP("udp", nil) // automatically chosen.
@@ -230,39 +243,39 @@ func (r *Request) udpAssociate(ctx context.Context, conn net.Conn) error {
 	go func() {
 		defer udpConn.Close()
 
-		frame := make([]byte, maxBuffer)
+		frame := make([]byte, maxBufferSize)
 
-		n, remoteAddr, err := udpConn.ReadFromUDP(frame)
+		n, remoteAddr, err := udpConn.ReadFrom(frame)
 		if err != nil {
 			log.Println(err)
 			return
 		}
-		buf := make([]byte, maxBuffer)
-		nn, addr, err := udputil.ExtractData(n, frame, buf)
+
+		buf, addr, err := udputil.ExtractData(frame[:n])
 		if err != nil {
 			log.Println(err)
 			return
 		}
-		log.Println(buf[:nn], nn, addr)
+		log.Println(buf, addr)
 		conn, err := r.DialContext(context.Background(), "udp", addr.String())
 		if err != nil {
 			log.Println(err)
 			return
 		}
 		defer conn.Close()
-		if _, err := conn.Write(buf[:nn]); err != nil {
+		if _, err := conn.Write(buf); err != nil {
 			log.Println(err)
 			return
 		}
 
-		buf = make([]byte, maxBuffer)
-		nnn, err := conn.Read(buf)
+		buf = make([]byte, maxBufferSize)
+		nn, err := conn.Read(buf)
 		if err != nil {
 			log.Println(err)
 			return
 		}
-		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nnn])
-		if _, err := udpConn.WriteToUDP(dest, remoteAddr); err != nil {
+		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nn])
+		if _, err := udpConn.WriteTo(dest, remoteAddr); err != nil {
 			log.Println(err)
 			return
 		}
@@ -291,17 +304,4 @@ func (r *Request) udpAssociate(ctx context.Context, conn net.Conn) error {
 	}
 
 	return nil
-}
-
-func transport(dst, src io.ReadWriter) error {
-	var eg errgroup.Group
-	eg.Go(func() error {
-		_, err := io.Copy(dst, src)
-		return err
-	})
-	eg.Go(func() error {
-		_, err := io.Copy(src, dst)
-		return err
-	})
-	return eg.Wait()
 }

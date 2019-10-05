@@ -2,7 +2,6 @@ package udputil
 
 import (
 	"fmt"
-	"io"
 	"net"
 
 	"github.com/Code-Hex/socks5/address"
@@ -29,8 +28,6 @@ func CreateFrame(aTyp address.Type, port int, ip net.IP, data []byte) []byte {
 	return buf
 }
 
-const maxBufferSize = 1024
-
 // ExtractData extracts data from udp frame of socks5
 //
 // +-----+------+------+-----------+---------+--------+
@@ -38,10 +35,10 @@ const maxBufferSize = 1024
 // +-----+------+------+-----------+---------+--------+
 // | 00  | 0    | 1    | 127.0.0.1 | 1201    | ...(1) |
 // +-----+------+------+-----------+---------+--------+
-func ExtractData(n int, frame, b []byte) (int, *address.Info, error) {
+func ExtractData(frame []byte) ([]byte, *address.Info, error) {
 	l := 2 + 1 + 1 + 2 // rsv + frag + atyp + port
-	if l > n {
-		return 0, nil, fmt.Errorf("unexpected data format: %v", frame[:n])
+	if l > len(frame) {
+		return nil, nil, fmt.Errorf("unexpected data format: %v", frame)
 	}
 
 	// Implementation of fragmentation is optional; an implementation that
@@ -49,7 +46,7 @@ func ExtractData(n int, frame, b []byte) (int, *address.Info, error) {
 	// field is other than X'00'.
 	fragmentation := frame[2]
 	if fragmentation != 0 {
-		return 0, nil, fmt.Errorf("unsupported fragmentation: %d", fragmentation)
+		return nil, nil, fmt.Errorf("unsupported fragmentation: %d", fragmentation)
 	}
 
 	aTyp := address.Type(frame[3])
@@ -61,26 +58,15 @@ func ExtractData(n int, frame, b []byte) (int, *address.Info, error) {
 	case address.TypeFQDN:
 		l += 1 + int(frame[4]) // size of length field + length of fqdn
 	default:
-		return 0, nil, &address.Unrecognized{
+		return nil, nil, &address.Unrecognized{
 			Type: aTyp,
 		}
 	}
 
-	copy(b, frame[l:n])
-
 	// extract data
-	return n - l, &address.Info{
+	return frame[l:], &address.Info{
 		Host: frame[4 : l-2],
 		Port: (int(frame[l-2]) << 8) | int(frame[l-1]),
 		Type: aTyp,
 	}, nil
-}
-
-func ExtractDataFromConn(conn io.Reader, b []byte) (int, *address.Info, error) {
-	buf := make([]byte, maxBufferSize)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return 0, nil, err
-	}
-	return ExtractData(n, buf, b)
 }

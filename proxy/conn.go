@@ -16,13 +16,21 @@ type Conn struct {
 	aTyp       address.Type
 }
 
+const maxBufferSize = 1024
+
 func (c *Conn) Read(b []byte) (n int, err error) {
 	if c.UDPConn != nil {
-		n, _, err := udputil.ExtractDataFromConn(c.UDPConn, b)
+		frame := make([]byte, maxBufferSize)
+		n, err := c.UDPConn.Read(frame)
 		if err != nil {
 			return 0, err
 		}
-		return n, nil
+		buf, _, err := udputil.ExtractData(frame[:n])
+		if err != nil {
+			return 0, err
+		}
+		copy(b, buf)
+		return len(buf), nil
 	}
 	return c.Conn.Read(b)
 }
