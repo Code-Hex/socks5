@@ -73,6 +73,18 @@ func extractUDPData(conn net.Conn, b []byte) (int, error) {
 	}
 
 	l := 2 + 1 + 1 + 2 // rsv + frag + atyp + port
+	if l > n {
+		return 0, fmt.Errorf("unexpected data format: %v", buf[:n])
+	}
+
+	// Implementation of fragmentation is optional; an implementation that
+	// does not support fragmentation MUST drop any datagram whose FRAG
+	// field is other than X'00'.
+	fragmentation := buf[2]
+	if fragmentation != 0 {
+		return 0, fmt.Errorf("unsupported fragmentation: %d", fragmentation)
+	}
+
 	switch buf[3] {
 	case address.TypeIPv4:
 		l += net.IPv4len
