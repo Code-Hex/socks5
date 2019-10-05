@@ -60,14 +60,15 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
-	destAddr, err := d.send(ctx, socks5Conn, address)
+	relayAddr, err := d.send(ctx, socks5Conn, address)
 	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
+
 	var udpConn net.Conn
 	switch network {
 	case "udp", "udp4", "udp6":
-		address := destAddr.String()
+		address := relayAddr.String()
 		udpConn, err = d.Dialer.DialContext(ctx, network, address)
 		if err != nil {
 			return nil, d.newError(err, network, address)
@@ -85,7 +86,6 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 	return &Conn{
 		Conn:       socks5Conn,
 		udpConn:    udpConn,
-		destAddr:   destAddr,
 		targetHost: ip,
 		targetPort: port,
 		aTyp:       aTyp,

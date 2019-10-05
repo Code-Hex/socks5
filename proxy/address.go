@@ -19,6 +19,7 @@ func newAddr(address, network string) net.Addr {
 	}
 }
 
+// String returns string such as "127.0.0.1:3000"
 func (a *Addr) String() string {
 	if a == nil {
 		return "<nil>"

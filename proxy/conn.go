@@ -11,7 +11,6 @@ import (
 type Conn struct {
 	net.Conn
 	udpConn    net.Conn
-	destAddr   *address.Info
 	targetHost net.IP
 	targetPort int
 	aTyp       address.Type
