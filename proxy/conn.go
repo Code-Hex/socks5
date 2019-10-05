@@ -5,16 +5,16 @@ import (
 	"io"
 	"net"
 
-	"github.com/Code-Hex/socks5/internal/address"
+	"github.com/Code-Hex/socks5/address"
 )
 
 type Conn struct {
 	net.Conn
 	udpConn    net.Conn
-	destAddr   *destAddr
+	destAddr   *address.Info
 	targetHost net.IP
 	targetPort int
-	aTyp       int
+	aTyp       address.Type
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
@@ -44,9 +44,9 @@ func (c *Conn) Close() error {
 // +-----+------+------+-----------+---------+--------+
 // | 00  | 0    | 1    | 127.0.0.1 | 1201    | ...(1) |
 // +-----+------+------+-----------+---------+--------+
-func createUDPFrame(aTyp, port int, ip net.IP, data []byte) []byte {
+func createUDPFrame(aTyp address.Type, port int, ip net.IP, data []byte) []byte {
 	buf := []byte{0, 0, 0, byte(aTyp)}
-	if aTyp == address.TypeFQDN {
+	if address.TypeFQDN == aTyp {
 		host := ip.String()
 		buf = append(buf, byte(len(host)))
 		buf = append(buf, host...)
@@ -85,7 +85,7 @@ func extractUDPData(conn net.Conn, b []byte) (int, error) {
 		return 0, fmt.Errorf("unsupported fragmentation: %d", fragmentation)
 	}
 
-	switch buf[3] {
+	switch address.Type(buf[3]) {
 	case address.TypeIPv4:
 		l += net.IPv4len
 	case address.TypeIPv6:
@@ -98,7 +98,9 @@ func extractUDPData(conn net.Conn, b []byte) (int, error) {
 		}
 		l += int(buf[0])
 	default:
-		return 0, fmt.Errorf("unknown address type: %d", int(buf[3]))
+		return 0, &address.Unrecognized{
+			Type: address.Type(buf[3]),
+		}
 	}
 
 	copy(b, buf[l:n])

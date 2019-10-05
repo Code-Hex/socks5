@@ -10,7 +10,8 @@ import (
 	"syscall"
 
 	"github.com/Code-Hex/socks5"
-	"github.com/Code-Hex/socks5/internal/address"
+	"github.com/Code-Hex/socks5/address"
+	"github.com/Code-Hex/socks5/internal/addrutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -19,7 +20,7 @@ var ErrCommandNotSupported = errors.New("command not supported")
 type Request struct {
 	Version  int
 	Command  socks5.Command
-	DestAddr *address.Addr
+	DestAddr *address.Info
 
 	DialContext  func(ctx context.Context, network, address string) (net.Conn, error)
 	Listen       func(ctx context.Context, network, address string) (net.Listener, error)
@@ -36,7 +37,7 @@ type Request struct {
 func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
 	// read version, command, reserved.
 	header := make([]byte, 3)
-	if _, err := io.ReadAtLeast(conn, header, 3); err != nil {
+	if _, err := conn.Read(header); err != nil {
 		return nil, fmt.Errorf("failed to get header information: %v", err)
 	}
 	// Ensure we are compatible
@@ -44,7 +45,7 @@ func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
 		return nil, fmt.Errorf("unsupported version: %d", header[0])
 	}
 
-	addr, err := address.Read(conn)
+	addr, err := addrutil.Read(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -106,10 +107,11 @@ func replyStatusByErr(err error) socks5.Reply {
 	return socks5.StatusGeneralServerFailure
 }
 
-func reply(conn io.Writer, reply socks5.Reply, addr net.Addr) error {
+func reply(conn io.Writer, reply socks5.Reply, addr *address.Info) error {
 	var (
-		addrType, addrPort int
-		addrBody           []byte
+		addrType address.Type
+		addrPort int
+		addrBody []byte
 	)
 
 	switch {
@@ -193,7 +195,7 @@ func (r *Request) connect(ctx context.Context, conn net.Conn) error {
 
 func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 	dest := r.DestAddr
-	target, err := r.DialContext(ctx, dest.Network(), dest.String())
+	target, err := r.DialContext(ctx, "tcp", dest.String())
 	if err != nil {
 		return err
 	}
@@ -204,18 +206,13 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 
-	host, p, err := net.SplitHostPort(ln.Addr().String())
+	host, port, err := addrutil.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		return err
 	}
 
-	port, err := strconv.Atoi(p)
-	if err != nil {
-		return err
-	}
-
-	bind := &address.Addr{
-		Host: host,
+	bind := &address.Info{
+		Host: []byte(host),
 		Port: port,
 	}
 

@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/Code-Hex/socks5"
+	"github.com/Code-Hex/socks5/address"
 	"github.com/Code-Hex/socks5/auth"
-	"github.com/Code-Hex/socks5/internal/address"
 	"github.com/Code-Hex/socks5/internal/addrutil"
 )
 
@@ -68,9 +67,7 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 	var udpConn net.Conn
 	switch network {
 	case "udp", "udp4", "udp6":
-		host := destAddr.ip.String()
-		port := strconv.Itoa(destAddr.port)
-		address := net.JoinHostPort(host, port)
+		address := destAddr.String()
 		udpConn, err = d.Dialer.DialContext(ctx, network, address)
 		if err != nil {
 			return nil, d.newError(err, network, address)
@@ -91,11 +88,11 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 		destAddr:   destAddr,
 		targetHost: ip,
 		targetPort: port,
-		aTyp:       int(aTyp),
+		aTyp:       aTyp,
 	}, nil
 }
 
-func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) (*destAddr, error) {
+func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) (*address.Info, error) {
 	if deadline, ok := ctx.Deadline(); ok && !deadline.IsZero() {
 		conn.SetDeadline(deadline)
 		defer conn.SetDeadline(time.Time{})
@@ -113,7 +110,7 @@ func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) 
 	return d.sendCommand(conn, b, host, port)
 }
 
-func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port int) (*destAddr, error) {
+func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port int) (*address.Info, error) {
 	bytes = bytes[:0]
 	// +----+-----+-------+------+----------+----------+
 	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -126,7 +123,7 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 		return nil, err
 	}
 
-	bytes = append(bytes, aTyp)
+	bytes = append(bytes, byte(aTyp))
 
 	if aTyp == address.TypeFQDN {
 		bytes = append(bytes, byte(len(host)))
@@ -150,14 +147,8 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 	return d.readReply(c, bytes)
 }
 
-type destAddr struct {
-	ip   net.IP
-	aTyp int
-	port int
-}
-
-func (d *DialListener) readReply(c net.Conn, b []byte) (*destAddr, error) {
-	if _, err := io.ReadFull(c, b[:4]); err != nil {
+func (d *DialListener) readReply(c net.Conn, b []byte) (*address.Info, error) {
+	if _, err := c.Read(b[:3]); err != nil {
 		return nil, err
 	}
 	if b[0] != socks5.Version {
@@ -169,50 +160,7 @@ func (d *DialListener) readReply(c net.Conn, b []byte) (*destAddr, error) {
 	if b[2] != 0 {
 		return nil, errors.New("non-zero reserved field")
 	}
-
-	l := 2 // for port
-	aTyp := int(b[3])
-
-	var ip net.IP
-
-	switch aTyp {
-	case address.TypeIPv4:
-		l += net.IPv4len
-		ip = make(net.IP, net.IPv4len)
-	case address.TypeIPv6:
-		l += net.IPv6len
-		ip = make(net.IP, net.IPv6len)
-	case address.TypeFQDN:
-		// Read 2 bytes
-		// First off, read length of the fqdn, then read fqdn string
-		if _, err := io.ReadFull(c, b[:1]); err != nil {
-			return nil, err
-		}
-		l += int(b[0])
-	default:
-		return nil, fmt.Errorf("unknown address type: %d", int(b[3]))
-	}
-	if cap(b) < l {
-		b = make([]byte, l)
-	} else {
-		b = b[:l]
-	}
-	if _, err := io.ReadFull(c, b); err != nil {
-		return nil, err
-	}
-
-	if ip != nil {
-		copy(ip, b)
-	} else {
-		copy(ip, b[:len(b)-2])
-	}
-	port := int(b[len(b)-2])<<8 | int(b[len(b)-1])
-
-	return &destAddr{
-		ip:   ip,
-		aTyp: aTyp,
-		port: port,
-	}, nil
+	return addrutil.Read(c)
 }
 
 func (d *DialListener) authenticate(c net.Conn, bytes []byte) error {
