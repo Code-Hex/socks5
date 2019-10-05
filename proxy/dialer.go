@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"time"
 
@@ -69,6 +70,7 @@ func (d *DialListener) DialContext(ctx context.Context, network, address string)
 	switch network {
 	case "udp", "udp4", "udp6":
 		address := relayAddr.String()
+		log.Println(address)
 		udpConn, err = d.Dialer.DialContext(ctx, network, address)
 		if err != nil {
 			return nil, d.newError(err, network, address)

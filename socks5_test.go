@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"testing"
 
@@ -38,12 +39,16 @@ func TestSocks5_Udp(t *testing.T) {
 }
 
 func TestSocks5_UdpA(t *testing.T) {
+	socks5Ln := socks5Server(t)
+	socks5Addr := socks5Ln.Addr()
+
 	addr := echoUdpServer(t)
 	ctx := context.Background()
-	dialer, err := proxy.Socks5(ctx, socks5.CmdUDPAssociate, "tcp", "127.0.0.1:1080")
+	dialer, err := proxy.Socks5(ctx, socks5.CmdUDPAssociate, socks5Addr.Network(), socks5Addr.String())
 	if err != nil {
 		t.Fatal(err)
 	}
+	log.Println("target", addr)
 	conn, err := dialer.Dial("udp", addr.String())
 	if err != nil {
 		t.Fatal(err)

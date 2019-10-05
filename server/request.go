@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"syscall"
+
+	"github.com/Code-Hex/socks5/internal/udputil"
 
 	"github.com/Code-Hex/socks5"
 	"github.com/Code-Hex/socks5/address"
@@ -66,7 +69,7 @@ func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
 	case socks5.CmdBind:
 		err = r.bind(ctx, conn)
 	case socks5.CmdUDPAssociate:
-		fallthrough
+		err = r.udpAssociate(ctx, conn)
 	default:
 		err = ErrCommandNotSupported
 	}
@@ -152,6 +155,7 @@ func reply(conn io.Writer, reply socks5.Reply, addr *address.Info) error {
 	msg = append(msg, addrBody...)
 	msg = append(msg, byte(addrPort>>8), byte(addrPort&0xff))
 
+	log.Println(msg, addrPort)
 	_, err := conn.Write(msg)
 
 	return err
@@ -213,6 +217,80 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 	}
 
 	return transport(target, c)
+}
+
+const maxBuffer = 102
+
+func (r *Request) udpAssociate(ctx context.Context, conn net.Conn) error {
+	udpConn, err := net.ListenUDP("udp", nil) // automatically chosen.
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		defer udpConn.Close()
+
+		frame := make([]byte, maxBuffer)
+
+		n, remoteAddr, err := udpConn.ReadFromUDP(frame)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		buf := make([]byte, maxBuffer)
+		nn, addr, err := udputil.ExtractData(n, frame, buf)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		log.Println(buf[:nn], nn, addr)
+		conn, err := r.DialContext(context.Background(), "udp", addr.String())
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		defer conn.Close()
+		if _, err := conn.Write(buf[:nn]); err != nil {
+			log.Println(err)
+			return
+		}
+
+		buf = make([]byte, maxBuffer)
+		nnn, err := conn.Read(buf)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nnn])
+		if _, err := udpConn.WriteToUDP(dest, remoteAddr); err != nil {
+			log.Println(err)
+			return
+		}
+
+	}()
+
+	hostStr, port, err := addrutil.SplitHostPort(udpConn.LocalAddr().String())
+	if err != nil {
+		return err
+	}
+
+	aTyp, host, err := addrutil.GetAddressInfo(hostStr)
+	if err != nil {
+		return err
+	}
+
+	relay := &address.Info{
+		Host: host,
+		Port: port,
+		Type: aTyp,
+	}
+
+	// TODO(codehex): it should pass the local address information?
+	if err := reply(conn, socks5.StatusSucceeded, relay); err != nil {
+		return fmt.Errorf("failed to send reply: %v", err)
+	}
+
+	return nil
 }
 
 func transport(dst, src io.ReadWriter) error {
