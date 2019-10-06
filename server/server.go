@@ -84,6 +84,7 @@ func (s *Socks5) Serve(l net.Listener) error {
 	if err != nil {
 		return err
 	}
+	defer udpConn.Close()
 
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
