@@ -209,12 +209,17 @@ func (r *Request) bind(ctx context.Context, s5conn net.Conn) error {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
-	c, err := ln.Accept()
-	if err != nil {
-		return err
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			return err
+		}
+		return transport(target, c)
 	}
-
-	return transport(target, c)
 }
 
 func transport(dst, src io.ReadWriter) error {
@@ -256,9 +261,9 @@ func (r *Request) udpAssociate(ctx context.Context, s5conn net.Conn) error {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
-	r.udpConn.SetDeadline(time.Now().Add(5 * time.Second))
-
 	for {
+		r.udpConn.SetDeadline(time.Now().Add(5 * time.Second))
+
 		frame := make([]byte, maxBufferSize)
 		n, remoteAddr, err := r.udpConn.ReadFrom(frame)
 		if err != nil {
@@ -270,25 +275,34 @@ func (r *Request) udpAssociate(ctx context.Context, s5conn net.Conn) error {
 			return err
 		}
 
-		targetConn, err := r.DialContext(context.Background(), "udp", addr.String())
-		if err != nil {
-			return err
-		}
-		defer targetConn.Close()
-
-		if _, err := targetConn.Write(buf); err != nil {
-			return err
-		}
-
-		buf = make([]byte, maxBufferSize)
-		nn, err := targetConn.Read(buf)
+		dst := make([]byte, maxBufferSize)
+		nn, err := r.dialUDP(context.Background(), addr, buf, dst)
 		if err != nil {
 			return err
 		}
 
-		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nn])
+		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, dst[:nn])
 		if _, err := r.udpConn.WriteTo(dest, remoteAddr); err != nil {
 			return err
 		}
 	}
+}
+
+func (r *Request) dialUDP(ctx context.Context, addr *address.Info, in, out []byte) (int, error) {
+	targetConn, err := r.DialContext(ctx, "udp", addr.String())
+	if err != nil {
+		return 0, err
+	}
+	defer targetConn.Close()
+	targetConn.SetDeadline(time.Now().Add(time.Second * 5))
+
+	if _, err := targetConn.Write(in); err != nil {
+		return 0, err
+	}
+
+	n, err := targetConn.Read(out)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
