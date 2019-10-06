@@ -14,7 +14,7 @@ import (
 // +-----+------+------+-----------+---------+--------+
 // | 00  | 0    | 1    | 127.0.0.1 | 1201    | ...(1) |
 // +-----+------+------+-----------+---------+--------+
-func CreateFrame(aTyp address.Type, port int, ip net.IP, data []byte) []byte {
+func CreateFrame(aTyp address.Type, port int, ip address.Host, data []byte) []byte {
 	buf := []byte{0, 0, 0, byte(aTyp)}
 	if address.TypeFQDN == aTyp {
 		host := ip.String()

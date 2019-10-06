@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"syscall"
+	"time"
 
 	"github.com/Code-Hex/socks5/internal/udputil"
 
@@ -205,7 +205,6 @@ func (r *Request) bind(ctx context.Context, s5conn net.Conn) error {
 		Type: aTyp,
 	}
 
-	// TODO(codehex): it should pass the local address information?
 	if err := reply(s5conn, socks5.StatusSucceeded, bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
@@ -253,42 +252,43 @@ func (r *Request) udpAssociate(ctx context.Context, s5conn net.Conn) error {
 		Type: aTyp,
 	}
 
-	// TODO(codehex): it should pass the local address information?
 	if err := reply(s5conn, socks5.StatusSucceeded, relay); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
-	frame := make([]byte, maxBufferSize)
+	r.udpConn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	n, remoteAddr, err := r.udpConn.ReadFrom(frame)
-	if err != nil {
-		return err
-	}
+	for {
+		frame := make([]byte, maxBufferSize)
+		n, remoteAddr, err := r.udpConn.ReadFrom(frame)
+		if err != nil {
+			return err
+		}
 
-	buf, addr, err := udputil.ExtractData(frame[:n])
-	if err != nil {
-		return err
-	}
-	log.Println(buf, addr)
-	targetConn, err := r.DialContext(context.Background(), "udp", addr.String())
-	if err != nil {
-		return err
-	}
-	defer targetConn.Close()
+		buf, addr, err := udputil.ExtractData(frame[:n])
+		if err != nil {
+			return err
+		}
 
-	if _, err := targetConn.Write(buf); err != nil {
-		return err
-	}
+		targetConn, err := r.DialContext(context.Background(), "udp", addr.String())
+		if err != nil {
+			return err
+		}
+		defer targetConn.Close()
 
-	buf = make([]byte, maxBufferSize)
-	nn, err := targetConn.Read(buf)
-	if err != nil {
-		return err
-	}
-	dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nn])
-	if _, err := r.udpConn.WriteTo(dest, remoteAddr); err != nil {
-		return err
-	}
+		if _, err := targetConn.Write(buf); err != nil {
+			return err
+		}
 
-	return nil
+		buf = make([]byte, maxBufferSize)
+		nn, err := targetConn.Read(buf)
+		if err != nil {
+			return err
+		}
+
+		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nn])
+		if _, err := r.udpConn.WriteTo(dest, remoteAddr); err != nil {
+			return err
+		}
+	}
 }

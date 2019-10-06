@@ -14,14 +14,27 @@ func (u Unrecognized) Error() string {
 	return fmt.Sprintf("unrecognized address type: %d", u.Type)
 }
 
+type Host []byte
+
+func (h Host) String() string { return string(h) }
+
 type Info struct {
-	Host net.IP
+	Host Host
 	Port int
 	Type Type
 }
 
 func (i *Info) String() string {
-	return net.JoinHostPort(i.Host.String(), strconv.Itoa(i.Port))
+	var host string
+	switch i.Type {
+	case TypeIPv4, TypeIPv6:
+		host = net.IP(i.Host).String()
+	case TypeFQDN:
+		host = i.Host.String()
+	default:
+		host = "unknown"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(i.Port))
 }
 
 const (

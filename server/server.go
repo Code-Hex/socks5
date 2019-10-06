@@ -78,6 +78,8 @@ func (s *Socks5) ListenAndServe(network, addr string) error {
 // Serve is used to serve connections from a listener
 func (s *Socks5) Serve(l net.Listener) error {
 	ctx := context.Background()
+
+	// for udp associate
 	udpConn, err := s.config.ListenPacket(ctx, "udp", "0.0.0.0:0")
 	if err != nil {
 		return err

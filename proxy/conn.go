@@ -13,7 +13,7 @@ type Conn struct {
 	net.Conn
 	UDPConn net.Conn
 
-	targetHost net.IP
+	targetHost address.Host
 	targetPort int
 	aTyp       address.Type
 }
@@ -39,7 +39,6 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 
 func (c *Conn) Write(b []byte) (n int, err error) {
 	if c.UDPConn != nil {
-		//log.Println(c.targetPort, c.targetHost)
 		buf := udputil.CreateFrame(c.aTyp, c.targetPort, c.targetHost, b)
 		return c.UDPConn.Write(buf)
 	}
