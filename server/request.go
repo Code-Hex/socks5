@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"syscall"
+	"time"
+
+	"github.com/Code-Hex/socks5/internal/udputil"
 
 	"github.com/Code-Hex/socks5"
-	"github.com/Code-Hex/socks5/internal/address"
+	"github.com/Code-Hex/socks5/address"
+	"github.com/Code-Hex/socks5/internal/addrutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -19,10 +22,12 @@ var ErrCommandNotSupported = errors.New("command not supported")
 type Request struct {
 	Version  int
 	Command  socks5.Command
-	DestAddr *address.Addr
+	DestAddr *address.Info
 
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
 	Listen      func(ctx context.Context, network, address string) (net.Listener, error)
+
+	udpConn net.PacketConn
 }
 
 // NewRequest returns request
@@ -32,10 +37,10 @@ type Request struct {
 // +----+-----+-------+------+----------+----------+
 // | 1  |  1  | X'00' |  1   | Variable |    2     |
 // +----+-----+-------+------+----------+----------+
-func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
+func (s *Socks5) newRequest(s5conn io.Reader, udpConn net.PacketConn) (*Request, error) {
 	// read version, command, reserved.
 	header := make([]byte, 3)
-	if _, err := io.ReadAtLeast(conn, header, 3); err != nil {
+	if _, err := s5conn.Read(header); err != nil {
 		return nil, fmt.Errorf("failed to get header information: %v", err)
 	}
 	// Ensure we are compatible
@@ -43,7 +48,7 @@ func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
 		return nil, fmt.Errorf("unsupported version: %d", header[0])
 	}
 
-	addr, err := address.Read(conn)
+	addr, err := addrutil.Read(s5conn)
 	if err != nil {
 		return nil, err
 	}
@@ -55,24 +60,25 @@ func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
 
 		DialContext: s.config.DialContext,
 		Listen:      s.config.Listen,
+		udpConn:     udpConn,
 	}, nil
 }
 
-func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
+func (r *Request) do(ctx context.Context, s5conn net.Conn) (err error) {
 	switch r.Command {
 	case socks5.CmdConnect:
-		err = r.connect(ctx, conn)
+		err = r.connect(ctx, s5conn)
 	case socks5.CmdBind:
-		err = r.bind(ctx, conn)
+		err = r.bind(ctx, s5conn)
 	case socks5.CmdUDPAssociate:
-		fallthrough
+		err = r.udpAssociate(ctx, s5conn)
 	default:
 		err = ErrCommandNotSupported
 	}
 
 	if err != nil {
 		status := replyStatusByErr(err)
-		if err := r.reply(conn, status, nil); err != nil {
+		if err := reply(s5conn, status, nil); err != nil {
 			return fmt.Errorf("failed to reply: %v", err)
 		}
 		return err
@@ -105,10 +111,11 @@ func replyStatusByErr(err error) socks5.Reply {
 	return socks5.StatusGeneralServerFailure
 }
 
-func (r *Request) reply(conn io.Writer, reply socks5.Reply, addr net.Addr) error {
+func reply(s5conn io.Writer, reply socks5.Reply, addr *address.Info) error {
 	var (
-		addrType, addrPort int
-		addrBody           []byte
+		addrType address.Type
+		addrPort int
+		addrBody []byte
 	)
 
 	switch {
@@ -117,37 +124,18 @@ func (r *Request) reply(conn io.Writer, reply socks5.Reply, addr net.Addr) error
 		addrPort = 0
 		addrBody = make([]byte, 4)
 	default:
-		host, p, err := net.SplitHostPort(addr.String())
-		if err != nil {
-			return err
-		}
-		port, err := strconv.Atoi(p)
-		if err != nil {
-			return err
-		}
-		addrPort = port
-
-		if ip := net.ParseIP(host); ip != nil {
-			if ip4 := ip.To4(); ip4 != nil {
-				addrType = address.TypeIPv4
-				addrBody = ip4
-			} else if ip6 := ip.To16(); ip6 != nil {
-				addrType = address.TypeIPv6
-				addrBody = ip6
-			} else {
-				return errors.New("unknown address type")
-			}
-		} else {
-			if len(host) > 255 {
-				return errors.New("FQDN too long")
-			}
-			addrType = address.TypeFQDN
+		addrPort = addr.Port
+		addrType = addr.Type
+		if addrType == address.TypeFQDN {
+			host := addr.Host
 			addrBody = append(
 				[]byte{
 					byte(len(host)),
 				},
 				[]byte(host)...,
 			)
+		} else {
+			addrBody = addr.Host
 		}
 	}
 
@@ -169,30 +157,28 @@ func (r *Request) reply(conn io.Writer, reply socks5.Reply, addr net.Addr) error
 	msg = append(msg, addrBody...)
 	msg = append(msg, byte(addrPort>>8), byte(addrPort&0xff))
 
-	_, err := conn.Write(msg)
+	_, err := s5conn.Write(msg)
 
 	return err
 }
 
-func (r *Request) connect(ctx context.Context, conn net.Conn) error {
-	address := r.DestAddr.String()
-	target, err := r.DialContext(ctx, "tcp", address)
+func (r *Request) connect(ctx context.Context, s5conn net.Conn) error {
+	target, err := r.DialContext(ctx, "tcp", r.DestAddr.String())
 	if err != nil {
 		return err
 	}
 	defer target.Close()
 
 	// TODO(codehex): it should pass the local address information?
-	if err := r.reply(conn, socks5.StatusSucceeded, nil); err != nil {
+	if err := reply(s5conn, socks5.StatusSucceeded, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
-	return transport(conn, target)
+	return transport(s5conn, target)
 }
 
-func (r *Request) bind(ctx context.Context, conn net.Conn) error {
-	dest := r.DestAddr
-	target, err := r.DialContext(ctx, dest.Network(), dest.String())
+func (r *Request) bind(ctx context.Context, s5conn net.Conn) error {
+	target, err := r.DialContext(ctx, "tcp", r.DestAddr.String())
 	if err != nil {
 		return err
 	}
@@ -203,23 +189,23 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 
-	host, p, err := net.SplitHostPort(ln.Addr().String())
+	hostStr, port, err := addrutil.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		return err
 	}
 
-	port, err := strconv.Atoi(p)
+	aTyp, host, err := addrutil.GetAddressInfo(hostStr)
 	if err != nil {
 		return err
 	}
 
-	bind := &address.Addr{
+	bind := &address.Info{
 		Host: host,
 		Port: port,
+		Type: aTyp,
 	}
 
-	// TODO(codehex): it should pass the local address information?
-	if err := r.reply(conn, socks5.StatusSucceeded, bind); err != nil {
+	if err := reply(s5conn, socks5.StatusSucceeded, bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
@@ -242,4 +228,67 @@ func transport(dst, src io.ReadWriter) error {
 		return err
 	})
 	return eg.Wait()
+}
+
+const maxBufferSize = 1024
+
+func (r *Request) udpAssociate(ctx context.Context, s5conn net.Conn) error {
+
+	udpConnAddr := r.udpConn.LocalAddr()
+
+	hostStr, port, err := addrutil.SplitHostPort(udpConnAddr.String())
+	if err != nil {
+		return err
+	}
+
+	aTyp, host, err := addrutil.GetAddressInfo(hostStr)
+	if err != nil {
+		return err
+	}
+
+	relay := &address.Info{
+		Host: host,
+		Port: port,
+		Type: aTyp,
+	}
+
+	if err := reply(s5conn, socks5.StatusSucceeded, relay); err != nil {
+		return fmt.Errorf("failed to send reply: %v", err)
+	}
+
+	r.udpConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	for {
+		frame := make([]byte, maxBufferSize)
+		n, remoteAddr, err := r.udpConn.ReadFrom(frame)
+		if err != nil {
+			return err
+		}
+
+		buf, addr, err := udputil.ExtractData(frame[:n])
+		if err != nil {
+			return err
+		}
+
+		targetConn, err := r.DialContext(context.Background(), "udp", addr.String())
+		if err != nil {
+			return err
+		}
+		defer targetConn.Close()
+
+		if _, err := targetConn.Write(buf); err != nil {
+			return err
+		}
+
+		buf = make([]byte, maxBufferSize)
+		nn, err := targetConn.Read(buf)
+		if err != nil {
+			return err
+		}
+
+		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nn])
+		if _, err := r.udpConn.WriteTo(dest, remoteAddr); err != nil {
+			return err
+		}
+	}
 }

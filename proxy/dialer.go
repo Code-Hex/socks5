@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/Code-Hex/socks5"
+	"github.com/Code-Hex/socks5/address"
 	"github.com/Code-Hex/socks5/auth"
-	"github.com/Code-Hex/socks5/internal/address"
+	"github.com/Code-Hex/socks5/internal/addrutil"
 )
 
 // A DialListener holds SOCKS-specific options.
@@ -20,6 +20,7 @@ type DialListener struct {
 	network, address string         // these fields for socks5
 
 	AuthMethods map[auth.Method]auth.Authenticator
+	Dialer      net.Dialer
 }
 
 var ErrCommandUnimplemented = errors.New("command is unimplemented in proxy")
@@ -27,7 +28,8 @@ var ErrCommandUnimplemented = errors.New("command is unimplemented in proxy")
 func Socks5(ctx context.Context, cmd socks5.Command, network, address string) (*DialListener, error) {
 	switch cmd {
 	case socks5.CmdConnect,
-		socks5.CmdBind:
+		socks5.CmdBind,
+		socks5.CmdUDPAssociate:
 	default:
 		return nil, &net.OpError{
 			Op:   cmd.String(),
@@ -43,49 +45,72 @@ func Socks5(ctx context.Context, cmd socks5.Command, network, address string) (*
 	}, nil
 }
 
-func (d *DialListener) Dial(network, address string) (net.Conn, error) {
+func (d *DialListener) Dial(network, address string) (*Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
 
-func (d *DialListener) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (d *DialListener) DialContext(ctx context.Context, network, address string) (*Conn, error) {
 	if len(d.AuthMethods) == 0 {
 		d.AuthMethods = map[auth.Method]auth.Authenticator{
 			auth.MethodNotRequired: &NotRequired{},
 		}
 	}
-	var netDialer net.Dialer
-	conn, err := netDialer.DialContext(ctx, d.network, d.address)
+
+	socks5Conn, err := d.Dialer.DialContext(ctx, d.network, d.address)
 	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
-	if err := d.send(ctx, conn, address); err != nil {
+	relayAddr, err := d.send(ctx, socks5Conn, address)
+	if err != nil {
 		return nil, d.newError(err, network, address)
 	}
-	return conn, nil
+
+	var udpConn net.Conn
+	switch network {
+	case "udp", "udp4", "udp6":
+		address := relayAddr.String()
+		udpConn, err = d.Dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, d.newError(err, network, address)
+		}
+	}
+	host, port, err := addrutil.SplitHostPort(address)
+	if err != nil {
+		return nil, d.newError(err, network, address)
+	}
+	aTyp, ip, err := addrutil.GetAddressInfo(host)
+	if err != nil {
+		return nil, d.newError(err, network, address)
+	}
+
+	return &Conn{
+		Conn:       socks5Conn,
+		UDPConn:    udpConn,
+		targetHost: ip,
+		targetPort: port,
+		aTyp:       aTyp,
+	}, nil
 }
 
-func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) error {
+func (d *DialListener) send(ctx context.Context, conn net.Conn, address string) (*address.Info, error) {
 	if deadline, ok := ctx.Deadline(); ok && !deadline.IsZero() {
 		conn.SetDeadline(deadline)
 		defer conn.SetDeadline(time.Time{})
 	}
 
-	host, port, err := splitHostPort(address)
+	host, port, err := addrutil.SplitHostPort(address)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	b := make([]byte, 0, 6+len(host)) // the size here is just an estimate
 	if err := d.authenticate(conn, b); err != nil {
-		return err
+		return nil, err
 	}
-	if err := d.sendCommand(conn, b, host, port); err != nil {
-		return err
-	}
-	return nil
+	return d.sendCommand(conn, b, host, port)
 }
 
-func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port int) error {
+func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port int) (*address.Info, error) {
 	bytes = bytes[:0]
 	// +----+-----+-------+------+----------+----------+
 	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -93,27 +118,23 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 	// | 1  |  1  | X'00' |  1   | Variable |    2     |
 	// +----+-----+-------+------+----------+----------+
 	bytes = append(bytes, socks5.Version, byte(d.cmd), 0)
-	if ip := net.ParseIP(host); ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			bytes = append(bytes, address.TypeIPv4)
-			bytes = append(bytes, ip4...)
-		} else if ip6 := ip.To16(); ip6 != nil {
-			bytes = append(bytes, address.TypeIPv6)
-			bytes = append(bytes, ip6...)
-		} else {
-			return errors.New("unknown address type")
-		}
-	} else {
-		if len(host) > 255 {
-			return errors.New("FQDN is too long")
-		}
-		bytes = append(bytes, address.TypeFQDN)
+	aTyp, addr, err := addrutil.GetAddressInfo(host)
+	if err != nil {
+		return nil, err
+	}
+
+	bytes = append(bytes, byte(aTyp))
+
+	if aTyp == address.TypeFQDN {
 		bytes = append(bytes, byte(len(host)))
 		bytes = append(bytes, host...)
+	} else {
+		bytes = append(bytes, addr...)
 	}
+
 	bytes = append(bytes, byte(port>>8), byte(port))
 	if _, err := c.Write(bytes); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Reply from server like this format
@@ -126,47 +147,20 @@ func (d *DialListener) sendCommand(c net.Conn, bytes []byte, host string, port i
 	return d.readReply(c, bytes)
 }
 
-func (d *DialListener) readReply(c net.Conn, b []byte) error {
-	if _, err := io.ReadFull(c, b[:4]); err != nil {
-		return err
+func (d *DialListener) readReply(c net.Conn, b []byte) (*address.Info, error) {
+	if _, err := c.Read(b[:3]); err != nil {
+		return nil, err
 	}
 	if b[0] != socks5.Version {
-		return fmt.Errorf("unexpected protocol version %d", b[0])
+		return nil, fmt.Errorf("unexpected protocol version %d", b[0])
 	}
 	if status := socks5.Reply(b[1]); status != socks5.StatusSucceeded {
-		return errors.New(status.String())
+		return nil, errors.New(status.String())
 	}
 	if b[2] != 0 {
-		return errors.New("non-zero reserved field")
+		return nil, errors.New("non-zero reserved field")
 	}
-
-	l := 2 // for port
-
-	switch b[3] {
-	case address.TypeIPv4:
-		l += net.IPv4len
-	case address.TypeIPv6:
-		l += net.IPv6len
-	case address.TypeFQDN:
-		// Read 2 bytes
-		// First off, read length of the fqdn, then read fqdn string
-		if _, err := io.ReadFull(c, b[:1]); err != nil {
-			return err
-		}
-		l += int(b[0])
-	default:
-		return fmt.Errorf("unknown address type: %d", int(b[3]))
-	}
-	if cap(b) < l {
-		b = make([]byte, l)
-	} else {
-		b = b[:l]
-	}
-	if _, err := io.ReadFull(c, b); err != nil {
-		return err
-	}
-
-	return nil
+	return addrutil.Read(c)
 }
 
 func (d *DialListener) authenticate(c net.Conn, bytes []byte) error {
@@ -220,19 +214,4 @@ func (d *DialListener) newError(err error, network, address string) error {
 		Addr:   newAddr(address, network),
 		Err:    err,
 	}
-}
-
-func splitHostPort(address string) (string, int, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return "", 0, err
-	}
-	portnum, err := strconv.Atoi(port)
-	if err != nil {
-		return "", 0, err
-	}
-	if 1 > portnum || portnum > 0xffff {
-		return "", 0, fmt.Errorf("port number out of range: %d", portnum)
-	}
-	return host, portnum, nil
 }

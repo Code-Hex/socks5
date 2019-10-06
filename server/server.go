@@ -17,8 +17,9 @@ type Config struct {
 	AuthMethods map[auth.Method]auth.Authenticator
 
 	// Optional.
-	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
-	Listen      func(ctx context.Context, network, address string) (net.Listener, error)
+	DialContext  func(ctx context.Context, network, address string) (net.Conn, error)
+	Listen       func(ctx context.Context, network, address string) (net.Listener, error)
+	ListenPacket func(ctx context.Context, network, address string) (net.PacketConn, error)
 }
 
 func New(c *Config) *Socks5 {
@@ -40,6 +41,12 @@ func New(c *Config) *Socks5 {
 		c.Listen = func(ctx context.Context, network, address string) (net.Listener, error) {
 			var l net.ListenConfig
 			return l.Listen(ctx, network, address)
+		}
+	}
+	if c.ListenPacket == nil {
+		c.ListenPacket = func(ctx context.Context, network, address string) (net.PacketConn, error) {
+			var l net.ListenConfig
+			return l.ListenPacket(ctx, network, address)
 		}
 	}
 	return &Socks5{
@@ -71,6 +78,13 @@ func (s *Socks5) ListenAndServe(network, addr string) error {
 // Serve is used to serve connections from a listener
 func (s *Socks5) Serve(l net.Listener) error {
 	ctx := context.Background()
+
+	// for udp associate
+	udpConn, err := s.config.ListenPacket(ctx, "udp", "0.0.0.0:0")
+	if err != nil {
+		return err
+	}
+
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
 		select {
@@ -98,32 +112,14 @@ func (s *Socks5) Serve(l net.Listener) error {
 		}
 		tempDelay = 0
 
+		udpConn := udpConn // To avoid race condition
 		go func() {
-			if err := s.serveConn(ctx, conn); err != nil {
-				log.Printf("socks5: error %v", err)
+			if err := s.serveConn(ctx, conn, udpConn); err != nil {
+				log.Printf("socks5: error(tcp) %v", err)
 			}
-			log.Println("done serve")
+			log.Println("done tcp serve")
 		}()
 	}
-}
-
-func (s *Socks5) serveConn(ctx context.Context, conn net.Conn) error {
-	s.wg.Add(1)
-	defer func() {
-		s.wg.Done()
-		conn.Close()
-	}()
-
-	if err := s.authenticate(conn); err != nil {
-		return err
-	}
-
-	req, err := s.newRequest(conn)
-	if err != nil {
-		return err
-	}
-
-	return req.do(ctx, conn)
 }
 
 func (s *Socks5) Shutdown(ctx context.Context) error {
@@ -140,4 +136,23 @@ func (s *Socks5) Shutdown(ctx context.Context) error {
 	case <-s.waitingDone:
 	}
 	return nil
+}
+
+func (s *Socks5) serveConn(ctx context.Context, conn net.Conn, udpConn net.PacketConn) error {
+	s.wg.Add(1)
+	defer func() {
+		s.wg.Done()
+		conn.Close()
+	}()
+
+	if err := s.authenticate(conn); err != nil {
+		return err
+	}
+
+	req, err := s.newRequest(conn, udpConn)
+	if err != nil {
+		return err
+	}
+
+	return req.do(ctx, conn)
 }
