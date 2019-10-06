@@ -24,9 +24,10 @@ type Request struct {
 	Command  socks5.Command
 	DestAddr *address.Info
 
-	DialContext  func(ctx context.Context, network, address string) (net.Conn, error)
-	Listen       func(ctx context.Context, network, address string) (net.Listener, error)
-	ListenPacket func(ctx context.Context, network, address string) (net.PacketConn, error)
+	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	Listen      func(ctx context.Context, network, address string) (net.Listener, error)
+
+	udpConn net.PacketConn
 }
 
 // NewRequest returns request
@@ -36,10 +37,10 @@ type Request struct {
 // +----+-----+-------+------+----------+----------+
 // | 1  |  1  | X'00' |  1   | Variable |    2     |
 // +----+-----+-------+------+----------+----------+
-func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
+func (s *Socks5) newRequest(s5conn io.Reader, udpConn net.PacketConn) (*Request, error) {
 	// read version, command, reserved.
 	header := make([]byte, 3)
-	if _, err := conn.Read(header); err != nil {
+	if _, err := s5conn.Read(header); err != nil {
 		return nil, fmt.Errorf("failed to get header information: %v", err)
 	}
 	// Ensure we are compatible
@@ -47,7 +48,7 @@ func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
 		return nil, fmt.Errorf("unsupported version: %d", header[0])
 	}
 
-	addr, err := addrutil.Read(conn)
+	addr, err := addrutil.Read(s5conn)
 	if err != nil {
 		return nil, err
 	}
@@ -59,24 +60,25 @@ func (s *Socks5) newRequest(conn io.Reader) (*Request, error) {
 
 		DialContext: s.config.DialContext,
 		Listen:      s.config.Listen,
+		udpConn:     udpConn,
 	}, nil
 }
 
-func (r *Request) do(ctx context.Context, conn net.Conn) (err error) {
+func (r *Request) do(ctx context.Context, s5conn net.Conn) (err error) {
 	switch r.Command {
 	case socks5.CmdConnect:
-		err = r.connect(ctx, conn)
+		err = r.connect(ctx, s5conn)
 	case socks5.CmdBind:
-		err = r.bind(ctx, conn)
+		err = r.bind(ctx, s5conn)
 	case socks5.CmdUDPAssociate:
-		err = r.udpAssociate(ctx, conn)
+		err = r.udpAssociate(ctx, s5conn)
 	default:
 		err = ErrCommandNotSupported
 	}
 
 	if err != nil {
 		status := replyStatusByErr(err)
-		if err := reply(conn, status, nil); err != nil {
+		if err := reply(s5conn, status, nil); err != nil {
 			return fmt.Errorf("failed to reply: %v", err)
 		}
 		return err
@@ -109,7 +111,7 @@ func replyStatusByErr(err error) socks5.Reply {
 	return socks5.StatusGeneralServerFailure
 }
 
-func reply(conn io.Writer, reply socks5.Reply, addr *address.Info) error {
+func reply(s5conn io.Writer, reply socks5.Reply, addr *address.Info) error {
 	var (
 		addrType address.Type
 		addrPort int
@@ -155,31 +157,28 @@ func reply(conn io.Writer, reply socks5.Reply, addr *address.Info) error {
 	msg = append(msg, addrBody...)
 	msg = append(msg, byte(addrPort>>8), byte(addrPort&0xff))
 
-	log.Println(msg, addrPort)
-	_, err := conn.Write(msg)
+	_, err := s5conn.Write(msg)
 
 	return err
 }
 
-func (r *Request) connect(ctx context.Context, conn net.Conn) error {
-	address := r.DestAddr.String()
-	target, err := r.DialContext(ctx, "tcp", address)
+func (r *Request) connect(ctx context.Context, s5conn net.Conn) error {
+	target, err := r.DialContext(ctx, "tcp", r.DestAddr.String())
 	if err != nil {
 		return err
 	}
 	defer target.Close()
 
 	// TODO(codehex): it should pass the local address information?
-	if err := reply(conn, socks5.StatusSucceeded, nil); err != nil {
+	if err := reply(s5conn, socks5.StatusSucceeded, nil); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
-	return transport(conn, target)
+	return transport(s5conn, target)
 }
 
-func (r *Request) bind(ctx context.Context, conn net.Conn) error {
-	dest := r.DestAddr
-	target, err := r.DialContext(ctx, "tcp", dest.String())
+func (r *Request) bind(ctx context.Context, s5conn net.Conn) error {
+	target, err := r.DialContext(ctx, "tcp", r.DestAddr.String())
 	if err != nil {
 		return err
 	}
@@ -207,7 +206,7 @@ func (r *Request) bind(ctx context.Context, conn net.Conn) error {
 	}
 
 	// TODO(codehex): it should pass the local address information?
-	if err := reply(conn, socks5.StatusSucceeded, bind); err != nil {
+	if err := reply(s5conn, socks5.StatusSucceeded, bind); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
 	}
 
@@ -234,55 +233,11 @@ func transport(dst, src io.ReadWriter) error {
 
 const maxBufferSize = 1024
 
-func (r *Request) udpAssociate(ctx context.Context, conn net.Conn) error {
-	udpConn, err := net.ListenUDP("udp", nil) // automatically chosen.
-	if err != nil {
-		return err
-	}
+func (r *Request) udpAssociate(ctx context.Context, s5conn net.Conn) error {
 
-	go func() {
-		defer udpConn.Close()
+	udpConnAddr := r.udpConn.LocalAddr()
 
-		frame := make([]byte, maxBufferSize)
-
-		n, remoteAddr, err := udpConn.ReadFrom(frame)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		buf, addr, err := udputil.ExtractData(frame[:n])
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		log.Println(buf, addr)
-		conn, err := r.DialContext(context.Background(), "udp", addr.String())
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer conn.Close()
-		if _, err := conn.Write(buf); err != nil {
-			log.Println(err)
-			return
-		}
-
-		buf = make([]byte, maxBufferSize)
-		nn, err := conn.Read(buf)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nn])
-		if _, err := udpConn.WriteTo(dest, remoteAddr); err != nil {
-			log.Println(err)
-			return
-		}
-
-	}()
-
-	hostStr, port, err := addrutil.SplitHostPort(udpConn.LocalAddr().String())
+	hostStr, port, err := addrutil.SplitHostPort(udpConnAddr.String())
 	if err != nil {
 		return err
 	}
@@ -299,8 +254,40 @@ func (r *Request) udpAssociate(ctx context.Context, conn net.Conn) error {
 	}
 
 	// TODO(codehex): it should pass the local address information?
-	if err := reply(conn, socks5.StatusSucceeded, relay); err != nil {
+	if err := reply(s5conn, socks5.StatusSucceeded, relay); err != nil {
 		return fmt.Errorf("failed to send reply: %v", err)
+	}
+
+	frame := make([]byte, maxBufferSize)
+
+	n, remoteAddr, err := r.udpConn.ReadFrom(frame)
+	if err != nil {
+		return err
+	}
+
+	buf, addr, err := udputil.ExtractData(frame[:n])
+	if err != nil {
+		return err
+	}
+	log.Println(buf, addr)
+	targetConn, err := r.DialContext(context.Background(), "udp", addr.String())
+	if err != nil {
+		return err
+	}
+	defer targetConn.Close()
+
+	if _, err := targetConn.Write(buf); err != nil {
+		return err
+	}
+
+	buf = make([]byte, maxBufferSize)
+	nn, err := targetConn.Read(buf)
+	if err != nil {
+		return err
+	}
+	dest := udputil.CreateFrame(addr.Type, addr.Port, addr.Host, buf[:nn])
+	if _, err := r.udpConn.WriteTo(dest, remoteAddr); err != nil {
+		return err
 	}
 
 	return nil

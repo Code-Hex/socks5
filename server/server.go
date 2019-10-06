@@ -78,6 +78,11 @@ func (s *Socks5) ListenAndServe(network, addr string) error {
 // Serve is used to serve connections from a listener
 func (s *Socks5) Serve(l net.Listener) error {
 	ctx := context.Background()
+	udpConn, err := s.config.ListenPacket(ctx, "udp", "0.0.0.0:0")
+	if err != nil {
+		return err
+	}
+
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
 		select {
@@ -105,8 +110,9 @@ func (s *Socks5) Serve(l net.Listener) error {
 		}
 		tempDelay = 0
 
+		udpConn := udpConn // To avoid race condition
 		go func() {
-			if err := s.serveConn(ctx, conn); err != nil {
+			if err := s.serveConn(ctx, conn, udpConn); err != nil {
 				log.Printf("socks5: error(tcp) %v", err)
 			}
 			log.Println("done tcp serve")
@@ -130,7 +136,7 @@ func (s *Socks5) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Socks5) serveConn(ctx context.Context, conn net.Conn) error {
+func (s *Socks5) serveConn(ctx context.Context, conn net.Conn, udpConn net.PacketConn) error {
 	s.wg.Add(1)
 	defer func() {
 		s.wg.Done()
@@ -141,7 +147,7 @@ func (s *Socks5) serveConn(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 
-	req, err := s.newRequest(conn)
+	req, err := s.newRequest(conn, udpConn)
 	if err != nil {
 		return err
 	}
